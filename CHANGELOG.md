@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `docs/decisions/README.md` is the decision index and the only hand-maintained summary. It holds one
+  row per ADR with the problem, options, decision, cost, falsification signal, and the undo command.
+- `npm run docs:decisions` renders `docs/why-this-shape.md` from that index and, with `--vault`,
+  writes one notebook note per row. `--check` writes nothing and fails a stale document;
+  `npm run check` runs it.
+- The four ADRs carry an explicit `**Date:**` line so a generated note has a deterministic `created`.
+- `scripts/decisions.mjs` is covered by `scripts/decisions.test.mjs` (15 cases), run by
+  `npm run test:scripts`.
+
 ## 0.1.0 (2026-11-21)
 
 - A runnable TypeScript template that takes a document from an inbox to a system of record, holds

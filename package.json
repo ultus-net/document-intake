@@ -15,7 +15,9 @@
     "lint": "eslint .",
     "typecheck": "npm run typecheck -w @document-intake/core && npm run typecheck -w @document-intake/demo",
     "test": "npm run test -w @document-intake/core && npm run test -w @document-intake/demo",
-    "check": "npm run lint && npm run build && npm run typecheck && npm run test",
+    "test:scripts": "node --test scripts/*.test.mjs",
+    "docs:decisions": "node scripts/decisions.mjs",
+    "check": "npm run lint && npm run build && npm run typecheck && npm run test && npm run test:scripts && npm run docs:decisions -- --check",
     "verify": "npm run build -w @document-intake/core && node packages/core/dist/cli/verify.js",
     "fixtures": "node scripts/make-fixtures.mjs",
     "demo": "npm run build && HOST=127.0.0.1 PORT=${DEMO_PORT:-4321} node apps/demo/build/index.js"

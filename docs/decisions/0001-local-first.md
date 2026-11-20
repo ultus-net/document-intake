@@ -2,6 +2,8 @@
 
 **Status:** accepted
 
+**Date:** 2026-11-21
+
 ## Context
 
 The template has to be readable and runnable by two audiences: an engineer deciding whether the

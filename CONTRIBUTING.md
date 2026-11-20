@@ -42,6 +42,8 @@ strong argument; adapters are the place for integration weight.
   `refactor:`.
 - Work on a short-lived branch. `main` takes changes through a pull request.
 - Update `CHANGELOG.md` in the same commit as the change.
+- An ADR and its row in `docs/decisions/README.md` land in the same commit. Regenerate the documents
+  with `npm run docs:decisions`; `npm run check` fails a stale `docs/why-this-shape.md`.
 - A new externally-triggered path gets a test: the happy path, one edge case, and the fields that
   matter.
 - Refactors ship separately from behaviour changes.

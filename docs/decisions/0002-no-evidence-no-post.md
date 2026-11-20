@@ -2,6 +2,8 @@
 
 **Status:** accepted
 
+**Date:** 2026-11-21
+
 ## Context
 
 An intake system that posts values without a trace is impossible to audit and impossible to correct
