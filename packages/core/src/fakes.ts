@@ -23,7 +23,7 @@ export function doc(messageId: string, text = "document"): SourceDocument {
 
 export const cleanDoc = (): SourceDocument => doc("clean-order", "three matched lines");
 export const letterheadDoc = (): SourceDocument => doc("letterhead", "supplier letterhead");
-export const vagueLineDoc = (): SourceDocument => doc("vague-line", "weave 4417");
+export const vagueLineDoc = (): SourceDocument => doc("vague-line", "aurelia weave");
 export const statementDoc = (): SourceDocument => doc("statement", "account statement");
 export const scanDoc = (): SourceDocument => doc("scan", "");
 export const freightOnlyDoc = (): SourceDocument => doc("freight-only", "freight rows");
@@ -49,7 +49,7 @@ function extracted(input: SourceDocument): ExtractedDocument {
     case "scan":
       return { status: "unreadable", fields: {}, identity: {}, lines: [] };
     case "vague-line":
-      return { ...base, lines: [{ description: "weave 4417", quantity: 3 }] };
+      return { ...base, lines: [{ description: "aurelia weave", quantity: 3 }] };
     case "freight-only":
       return { ...base, lines: [{ description: "freight", quantity: 1, lineTotal: 9000 }] };
     case "ambiguous-customer":
@@ -77,7 +77,7 @@ export function stubExtractor(): Extractor {
 export function stubCatalogue(): Catalogue {
   return {
     match: async (description) => {
-      if (description.trim() === "weave 4417") {
+      if (description.trim() === "aurelia weave") {
         return { score: 0.6, exactReference: false, rule: "hold" };
       }
       return { sku: "SKU-1", score: 0.95, exactReference: false, rule: "accept" };

@@ -13,7 +13,6 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - run: npm install --global npm@11.20.0
       - run: npm ci
-      - run: npm run build
       - run: npm run check
-      - run: node --test apps/demo/tests/

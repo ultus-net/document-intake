@@ -564,7 +564,11 @@ Expected: FAIL, `rebuildRuns is not a function`.
 
 - [ ] **Step 3: Implement**
 
-Every stage event must carry its result in `data` under a fixed name: `document`, `extracted`, `decision`, `posted`. `document` is its `DocumentRef`, never the bytes, because the log is JSON. `rebuildRuns` folds them in order by `runId`. A missing payload is a projection error, not silence: throw `IntakeError("projection", ...)`.
+Every stage event the projection consumes carries its result in `data` under a fixed name:
+`document`, `extracted`, `decision`, `posted`. `document` is its `DocumentRef`, never the bytes,
+because the log is JSON. `resolve.lines` stays in the log as audit detail but is not folded: the
+decision's evidence already carries each matched sku and quantity, which is what the accept path and
+the posted record need. `rebuildRuns` folds the consumed payloads in order by `runId`.
 
 - [ ] **Step 4: Run it to see it pass**
 
@@ -598,7 +602,7 @@ git commit -m "feat: rebuild runs from the event log"
 |---|---|
 | `clean-order.pdf` | header fields, three catalogue lines |
 | `letterhead.pdf` | our letterhead at the top, sender email of the customer in the body |
-| `vague-line.pdf` | header fields, one line reading `weave 4417` |
+| `vague-line.pdf` | header fields, one line reading `Aurelia weave` |
 | `statement.pdf` | an account statement, no order fields |
 | `credit-warning.pdf` | two large lines, above the customer's limit |
 | `blank.pdf` | a rectangle, no text layer |

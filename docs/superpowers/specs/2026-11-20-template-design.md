@@ -149,7 +149,7 @@ These are the contract, and the reason the pipeline is reusable.
 type Outcome = "auto" | "review" | "reject";
 
 interface Evidence {
-  field: string;        // "customer.account", "line[2].product"
+  field: string;        // "field:purchaseOrder", "line:2:sku"
   value: unknown;
   source: string;       // "extractor:header", "catalogue:ref", "agent:merge"
   rule?: string;        // the named rule that produced or accepted it
