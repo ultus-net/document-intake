@@ -186,10 +186,14 @@ tr:last-child td {
 
 .timeline li {
   display: grid;
-  grid-template-columns: 11rem 8rem 1fr;
+  grid-template-columns: 12.5rem 7rem 1fr;
   gap: var(--gap);
   padding: 0.45rem 0;
   border-bottom: 1px solid var(--line);
+}
+
+.timeline li > .mono {
+  white-space: nowrap;
 }
 
 .timeline li:last-child {

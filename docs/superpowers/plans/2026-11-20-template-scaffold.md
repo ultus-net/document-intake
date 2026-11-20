@@ -60,28 +60,32 @@
 
 - [ ] **Step 1: Create the workspace files**
 
-Root `package.json`: `"private": true`, `"type": "module"`, `"workspaces": ["packages/*", "apps/*"]`, `"engines": {"node": ">=22"}`, `"packageManager": "npm@10.9.0"`. Scripts:
+Root `package.json`: `"private": true`, `"type": "module"`, `"workspaces": ["packages/*", "apps/*"]`, `"engines": {"node": ">=22"}`, `"packageManager": "npm@11.20.0"`. Scripts:
 
 ```json
 {
-  "build": "npm run build --workspaces --if-present",
+  "build": "npm run build -w @document-intake/core && npm run build -w @document-intake/demo",
   "lint": "eslint .",
-  "typecheck": "npm run typecheck --workspaces --if-present",
-  "test": "npm run test --workspaces --if-present",
-  "check": "npm run lint && npm run typecheck && npm run test",
+  "typecheck": "npm run typecheck -w @document-intake/core && npm run typecheck -w @document-intake/demo",
+  "test": "npm run test -w @document-intake/core && npm run test -w @document-intake/demo",
+  "check": "npm run lint && npm run build && npm run typecheck && npm run test",
   "verify": "npm run build -w @document-intake/core && node packages/core/dist/cli/verify.js",
   "fixtures": "node scripts/make-fixtures.mjs",
   "demo": "npm run build && HOST=127.0.0.1 PORT=${DEMO_PORT:-4321} node apps/demo/build/index.js"
 }
 ```
 
+The workspace order is explicit because npm does not topologically sort workspaces: the demo needs
+core's `dist` before it builds or type-checks. `check` builds before it type-checks for the same
+reason.
+
 `tsconfig.base.json`: `target` `ES2022`, `module` `NodeNext`, `moduleResolution` `NodeNext`, `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `exactOptionalPropertyTypes`, `outDir` `dist`, `rootDir` `src`, `declaration`.
 
-`packages/core/package.json`: name `@document-intake/core`, `"type": "module"`, `"exports": {".": "./dist/index.js"}`, `"types": "./dist/index.d.ts"`, `dependencies` `{"pdfjs-dist": "5.4.149"}`, devDependencies `typescript` pinned. Scripts `build`, `typecheck`, `test` = `npm run build && node --test dist`.
+`packages/core/package.json`: name `@document-intake/core`, `"type": "module"`, `"exports": {".": "./dist/index.js"}`, `"types": "./dist/index.d.ts"`, `dependencies` `{"pdfjs-dist": "6.5.438"}`, devDependencies `typescript` pinned. Scripts `build`, `typecheck`, `test` = `npm run build && node --test dist`.
 
-`eslint.config.mjs`: flat config with pinned `typescript-eslint`, ignoring `dist`, `.svelte-kit`, `node_modules`, `var`, and `apps/demo/src/**/*.svelte`. Svelte files are type-checked by `svelte-check` in Task 10, so the lint gate stays dependency-light.
+`eslint.config.mjs`: flat config with pinned `typescript-eslint`, ignoring `dist`, `build`, `.svelte-kit`, `node_modules`, `var`, and `*.svelte`. Svelte files are type-checked by `svelte-check` in Task 10, so the lint gate stays dependency-light.
 
-`.gitignore`: `node_modules/`, `dist/`, `.svelte-kit/`, `var/`, `.env`.
+`.gitignore`: `node_modules/`, `dist/`, `build/`, `.svelte-kit/`, `var/`, `.env`.
 `.nvmrc`: `22`. `LICENSE`: MIT, `Copyright (c) 2026 ultus-net`.
 `CHANGELOG.md`: `# Changelog`, then `## 0.1.0 (unreleased)`.
 
@@ -657,8 +661,9 @@ git commit -m "feat: add the template extractor, the identity read, and six fixt
 ### Task 9: Demo adapters, API, lifecycle, and the smoke test
 
 **Files:**
-- Create: `apps/demo/{package.json,tsconfig.json,svelte.config.js,vite.config.ts}`
-- Create: `apps/demo/src/lib/server/{folder-inbox,jsonl-record,jsonl-log,correction,wiring}.ts`
+- Create: `apps/demo/{package.json,tsconfig.json,vite.config.ts}`
+- Create: `apps/demo/src/app.html`
+- Create: `apps/demo/src/lib/server/{folder-inbox,jsonl-record,jsonl-log,catalogue,customer-directory,correction,http,wiring}.ts`
 - Create: `apps/demo/src/routes/api/{drain,runs}/+server.ts`, `apps/demo/src/routes/api/runs/[id]/{accept,reject}/+server.ts`
 - Create: `apps/demo/tests/{helpers.js,smoke.test.js,accept.test.js}`
 
@@ -735,7 +740,7 @@ git commit -m "feat: add the demo adapters, API, lifecycle, and HTTP tests"
 
 - [ ] **Step 1: Add the Svelte toolchain to the gate**
 
-`apps/demo/package.json`: `@sveltejs/kit`, `@sveltejs/adapter-node`, `svelte`, `vite`, `svelte-check`, all pinned; scripts `build`, `typecheck` = `svelte-kit sync && svelte-check --tsconfig ./tsconfig.json`. `tsconfig.json` extends `.svelte-kit/tsconfig.json`. Root `typecheck` already fans out, so no root change.
+`apps/demo/package.json`: `@sveltejs/kit`, `@sveltejs/adapter-node`, `svelte`, `vite`, `svelte-check`, all pinned; scripts `build`, `typecheck` = `svelte-kit sync && svelte-check --tsconfig ./tsconfig.json`. `tsconfig.json` extends `$app/tsconfig` and lists `include` and `exclude`, because SvelteKit 3 no longer generates `.svelte-kit/tsconfig.json`. SvelteKit 3 also removed `svelte.config.js` and the `$lib` alias: the adapter is passed to the `sveltekit()` plugin in `vite.config.ts`, and `#lib` is declared in `package.json` `imports`. Root `typecheck` already runs core first, so no root change.
 
 - [ ] **Step 2: Write the failing UI test**
 
@@ -804,7 +809,7 @@ Each ADR: context, decision, consequence, one alternative rejected. `why-this-sh
 
 - [ ] **Step 4: Write the media script and update the changelog**
 
-Recording a screen is the one step an agent cannot do. `docs/media/README.md` gives the operator 90 seconds: start at the queue, drop `clean-order.pdf`, open the run, show the evidence table and the zero-model-calls line, open the held run, accept it, show the record. Saves `queue.png`, `run-detail.png`, `demo.gif`.
+The screenshots are rendered from the running demo, so they do not need a person. `docs/media/README.md` gives the commands: build, start on a fixed port, then headless `chromium --screenshot` for the queue, a posted run and a held run. Saves `queue.png`, `run-detail.png`, `held-run.png`. A short recording (`demo.gif`) is optional and operator-recorded.
 
 - [ ] **Step 5: Check the clean room without writing terms into the repo**
 
@@ -839,7 +844,7 @@ git commit -m "docs: add the README, adapter guide, ADRs, and demo script"
 
 - [ ] **Step 1: Confirm the gates, the assets, and the clean room**
 
-Run: `npm run check`, then `ls docs/media/{queue.png,run-detail.png,demo.gif}`, then the scan from Task 11.
+Run: `npm run check`, then `ls docs/media/{queue.png,run-detail.png,held-run.png}`, then the scan from Task 11.
 Expected: all three clean. No merge without the assets, because the README embeds them.
 
 - [ ] **Step 2: Create the remote and push both branches**
@@ -893,3 +898,31 @@ gh release create v0.1.0 --generate-notes
 - Pin `pdfjs-dist` exactly and prove extraction on Node 22 with `getDocument({ data }).promise` before building anything on it.
 - The demo's accept path re-runs the gates. Never let it post a value that skipped evidence, or the repo's central claim becomes false.
 - `verify` compares against the local store. Do not describe it as confirming the record exists in a remote system.
+
+---
+
+## Execution notes (recorded after the build)
+
+Deviations from the text above, with their reasons. The plan is otherwise the record of what ran.
+
+- **SvelteKit 3 changed the setup surface.** It removed `svelte.config.js`, moved adapter options
+  into the `sveltekit()` Vite plugin, replaced `$lib` with a `#lib` subpath import declared in
+  `package.json`, and made `tsconfig.json` extend `$app/tsconfig`. The demo follows those rules, so
+  Task 9 creates `app.html` and Task 10 does not create `svelte.config.js`.
+- **CSRF stays on.** SvelteKit 3 always checks the request origin. The HTTP tests send an `origin`
+  header rather than disabling the check. The browser path already sends one.
+- **Money is cents at the boundary.** The extractor converts printed currency to cents, so line
+  totals and the customer credit limit share one unit. Without this the credit-warning fixture
+  could not exceed the limit.
+- **The vague line is `Aurelia weave`.** `weave 4417` scored below the hold band against the
+  catalogue name. Dropping the reference lands it at about `0.65`, between `0.55` and `0.82`. The
+  fixture changed, not the thresholds.
+- **A duplicate gets its own run id.** Reusing the original id made the projection regress the
+  original run to `ingest` and mark a posted run as a duplicate. The suffix keeps both runs in the
+  audit trail.
+- **The demo gained three modules beyond the plan.** `catalogue.ts` and `customer-directory.ts`
+  implement the two remaining seams against the fixture JSON. `http.ts` maps typed errors to status
+  codes. The plan listed the adapters but not these files.
+- **Screenshots are rendered, not recorded.** Headless Chromium captures the three PNGs from the
+  running demo. The GIF remains optional.
+
