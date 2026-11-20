@@ -25,6 +25,15 @@ test("a held document is not re-run", async () => {
   assert.equal((await processDocument(vagueLineDoc(), deps)).duplicate, true);
 });
 
+test("a rejected document is not re-run either", async () => {
+  const deps = happyDeps();
+  const first = await processDocument(scanDoc(), deps);
+  assert.equal(first.decision?.outcome, "reject");
+  const second = await processDocument(scanDoc(), deps);
+  assert.equal(second.duplicate, true);
+  assert.equal((await deps.log.read()).filter((event) => event.event === "ingest.duplicate").length, 1);
+});
+
 test("the length prefix prevents key collisions", () => {
   const a = idempotencyKey({ messageId: "ab", bytes: textBytes("c") });
   const b = idempotencyKey({ messageId: "a", bytes: textBytes("bc") });

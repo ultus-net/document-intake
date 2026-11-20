@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { verifyAll } from "./verify.js";
 import { processDocument } from "./pipeline.js";
-import { cleanDoc, happyDeps, memoryRecord } from "./fakes.js";
+import { cleanDoc, happyDeps, memoryRecord, scanDoc, vagueLineDoc } from "./fakes.js";
 
 test("verify reports drift for the latest revision of a key", async () => {
   const deps = happyDeps();
@@ -32,4 +32,16 @@ test("verify reports ok when the record is unchanged", async () => {
   await processDocument(cleanDoc(), deps);
   const [result] = await verifyAll(deps, 0);
   assert.equal(result?.status, "ok");
+});
+
+test("verify reports only records that posted", async () => {
+  const deps = happyDeps();
+  await processDocument(cleanDoc(), deps);
+  await processDocument(vagueLineDoc(), deps);
+  await processDocument(scanDoc(), deps);
+  const results = await verifyAll(deps, 0);
+  assert.deepEqual(
+    results.map((result) => result.status),
+    ["ok"],
+  );
 });
