@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-11-21)
 
 - A runnable TypeScript template that takes a document from an inbox to a system of record, holds
   anything uncertain for a person, and keeps evidence for every posted field.
