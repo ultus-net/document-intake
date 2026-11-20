@@ -8,7 +8,7 @@ npm run check
 npm run demo
 ```
 
-Node 22 or newer. The toolchain and every dependency are pinned exact, and `package-lock.json` is
+Node 22.13 or newer (pdfjs-dist requires it). The toolchain and every dependency are pinned exact, and `package-lock.json` is
 committed, so `npm ci` is reproducible.
 
 ## The gate
