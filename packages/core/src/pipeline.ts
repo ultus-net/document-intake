@@ -1,6 +1,8 @@
 import type { Deps } from "./ports.js";
 import type { DocumentRef, Run, SourceDocument } from "./types.js";
 import { idempotencyKey } from "./idempotency.js";
+import { resolveLines } from "./stages/resolve.js";
+import { decide } from "./stages/decide.js";
 
 export function documentRef(doc: SourceDocument): DocumentRef {
   return { messageId: doc.messageId, filename: doc.filename, receivedAt: doc.receivedAt };
@@ -50,5 +52,32 @@ export async function processDocument(doc: SourceDocument, deps: Deps): Promise<
     data: { extracted },
   });
 
-  return { ...run, stage: "extract", extracted };
+  const lines = await resolveLines(extracted.lines, deps.catalogue);
+  await deps.log.append({
+    runId: run.id,
+    correlationId: run.correlationId,
+    stage: "resolve",
+    event: "resolve.lines",
+    summary: `${lines.length} matchable lines`,
+    data: { lines },
+  });
+
+  const customer = await deps.directory.resolve(doc, extracted.fields, extracted.identity);
+  const decision = decide({ extracted, lines, customer });
+  const event =
+    decision.outcome === "auto"
+      ? "decide.shortcircuit"
+      : decision.outcome === "review"
+        ? "decide.hold"
+        : "decide.reject";
+  await deps.log.append({
+    runId: run.id,
+    correlationId: run.correlationId,
+    stage: "decide",
+    event,
+    summary: decision.reasons.join("; "),
+    data: { decision, modelCalls: 0 },
+  });
+
+  return { ...run, stage: "decide", extracted, decision };
 }
