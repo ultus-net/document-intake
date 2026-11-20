@@ -66,8 +66,8 @@ function parseLines(lines: string[], tableAt: number): LineItem[] {
     const description = (matched[1] ?? "").trim();
     const quantity = Number(matched[2]);
     if (description === "" || !Number.isFinite(quantity) || quantity <= 0) continue;
-    const unitPrice = matched[3] === undefined ? undefined : Number(matched[3]);
-    const lineTotal = matched[4] === undefined ? undefined : Number(matched[4]);
+    const unitPrice = matched[3] === undefined ? undefined : Math.round(Number(matched[3]) * 100);
+    const lineTotal = matched[4] === undefined ? undefined : Math.round(Number(matched[4]) * 100);
     items.push({
       description,
       quantity,

@@ -23,8 +23,8 @@ test("reads the clean order", async () => {
   assert.deepEqual(out.lines[0], {
     description: "Aurelia Weave 4417",
     quantity: 2,
-    unitPrice: 120,
-    lineTotal: 240,
+    unitPrice: 12000,
+    lineTotal: 24000,
   });
 });
 

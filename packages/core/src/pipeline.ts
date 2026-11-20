@@ -24,15 +24,20 @@ export async function processDocument(doc: SourceDocument, deps: Deps): Promise<
   );
   const existing = await deps.record.find(key);
   if (seen || existing) {
+    const duplicate: Run = {
+      ...run,
+      id: `${run.id}-dup-${(await deps.log.read()).filter((event) => event.event === "ingest.duplicate").length + 1}`,
+      duplicate: true,
+    };
     await deps.log.append({
-      runId: run.id,
+      runId: duplicate.id,
       correlationId: run.correlationId,
       stage: "ingest",
       event: "ingest.duplicate",
-      summary: "document already seen",
-      data: { key },
+      summary: `${doc.filename} was already seen`,
+      data: { key, document: documentRef(doc) },
     });
-    return { ...run, duplicate: true };
+    return duplicate;
   }
 
   await deps.log.append({
