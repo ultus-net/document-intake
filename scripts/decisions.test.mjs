@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -49,6 +49,12 @@ function vault(root) {
   return path;
 }
 
+function indexRow(root, id) {
+  return readFileSync(join(root, "docs/decisions/README.md"), "utf8")
+    .split("\n")
+    .find((line) => line.startsWith(`| [${id}]`));
+}
+
 test("renders one teaching section per row in field order", () => {
   const root = fixture();
 
@@ -56,12 +62,13 @@ test("renders one teaching section per row in field order", () => {
 
   const text = readFileSync(join(root, "docs/why-this-shape.md"), "utf8");
   assert.match(text, /^# Why this shape\n/);
-  assert.match(text, /Verification limit: `npm run verify` compares each posted key with the local record store\./);
+  assert.match(text, /## The seam an adopter changes first\n\nThe `Extractor` is the first seam/);
+  assert.match(text, /## Verification limit\n\n`npm run verify` compares each posted key with the local record store\./);
   assert.match(
     text,
     /## 0001: Alpha choice\n\n\*\*Problem:\*\* Problem one\n\n\*\*Options:\*\* Option one\n\n\*\*Decision:\*\* Decision one\n\n\*\*Cost:\*\* Cost one\n\n\*\*Falsification signal:\*\* Falsifier one\n\n\*\*Undo:\*\* `git revert aaa`/,
   );
-  assert.equal(text.match(/^## /gm)?.length, 2);
+  assert.equal(text.match(/^## /gm)?.length, 4);
 });
 
 test("writes one note per row with the unified schema", () => {
@@ -163,6 +170,44 @@ test("refuses a symlinked note", () => {
 
   assert.throws(() => generate(root, { vault: notes }), SourceError);
   assert.equal(readFileSync(target, "utf8"), "# Outside\n");
+});
+
+test("refuses a symlinked vault", () => {
+  const root = fixture();
+  const real = join(root, "real-vault");
+  mkdirSync(real);
+  const link = join(root, "vault-link");
+  symlinkSync(real, link);
+
+  assert.throws(() => generate(root, { vault: link }), /vault is a symlink/);
+  assert.equal(readdirSync(real).length, 0);
+});
+
+test("refuses two rows for one ADR", () => {
+  const root = fixture();
+  const indexPath = join(root, "docs/decisions/README.md");
+  const row = indexRow(root, "0001");
+  writeFileSync(indexPath, readFileSync(indexPath, "utf8").replace(`${row}\n`, `${row}\n${row}\n`));
+
+  assert.throws(() => generate(root), /two rows for 0001-alpha\.md/);
+});
+
+test("refuses a row with an extra cell", () => {
+  const root = fixture();
+  const indexPath = join(root, "docs/decisions/README.md");
+  const row = indexRow(root, "0001");
+  writeFileSync(indexPath, readFileSync(indexPath, "utf8").replace(row, `${row} extra |`));
+
+  assert.throws(() => generate(root), /needs 7 cells/);
+});
+
+test("refuses a table row after a blank line", () => {
+  const root = fixture();
+  const indexPath = join(root, "docs/decisions/README.md");
+  const row = indexRow(root, "0001");
+  writeFileSync(indexPath, `${readFileSync(indexPath, "utf8")}\n${row}\n`);
+
+  assert.throws(() => generate(root), /table row outside the ADR table/);
 });
 
 test("refuses an ADR with no row", () => {
