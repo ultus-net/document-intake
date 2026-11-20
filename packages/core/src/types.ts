@@ -76,6 +76,7 @@ export interface Run {
   id: string;
   correlationId: string;
   stage: Stage;
+  key?: string;
   document?: DocumentRef;
   extracted?: ExtractedDocument;
   decision?: Decision;

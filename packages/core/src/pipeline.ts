@@ -3,6 +3,7 @@ import type { DocumentRef, Run, SourceDocument } from "./types.js";
 import { idempotencyKey } from "./idempotency.js";
 import { resolveLines } from "./stages/resolve.js";
 import { decide } from "./stages/decide.js";
+import { postRecord } from "./stages/post.js";
 
 export function documentRef(doc: SourceDocument): DocumentRef {
   return { messageId: doc.messageId, filename: doc.filename, receivedAt: doc.receivedAt };
@@ -14,6 +15,7 @@ export async function processDocument(doc: SourceDocument, deps: Deps): Promise<
     id: key.slice(0, 12),
     correlationId: doc.messageId,
     stage: "ingest",
+    key,
     document: documentRef(doc),
   };
 
@@ -79,5 +81,9 @@ export async function processDocument(doc: SourceDocument, deps: Deps): Promise<
     data: { decision, modelCalls: 0 },
   });
 
-  return { ...run, stage: "decide", extracted, decision };
+  const decided = { ...run, stage: "decide" as const, extracted, decision };
+  if (decision.outcome !== "auto") return decided;
+
+  const posted = await postRecord(decided, deps);
+  return { ...decided, stage: "post", posted };
 }
