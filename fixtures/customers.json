@@ -1,0 +1,23 @@
+[
+  {
+    "name": "Rata Design",
+    "email": "ap@rata.example",
+    "account": "ACC-1003",
+    "creditLimitCents": 100000
+  },
+  {
+    "name": "Kowhai Retail",
+    "email": "buyer@kowhai.example",
+    "account": "ACC-1001"
+  },
+  {
+    "name": "Tui Interiors",
+    "email": "orders@tui.example",
+    "account": "ACC-1002"
+  },
+  {
+    "name": "Kowhai Retail Ltd",
+    "email": "",
+    "account": "ACC-1004"
+  }
+]

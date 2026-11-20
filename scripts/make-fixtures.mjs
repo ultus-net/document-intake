@@ -15,23 +15,16 @@ const catalog = [
 ];
 
 const customers = [
+  { name: "Rata Design", email: "ap@rata.example", account: "ACC-1003", creditLimitCents: 100000 },
   { name: "Kowhai Retail", email: "buyer@kowhai.example", account: "ACC-1001" },
   { name: "Tui Interiors", email: "orders@tui.example", account: "ACC-1002" },
-  { name: "Rata Design", email: "ap@rata.example", account: "ACC-1003", creditLimitCents: 100000 },
-  { name: "Kowhai Retail Ltd", email: "accounts@kowhai-ltd.example", account: "ACC-1004" },
+  { name: "Kowhai Retail Ltd", email: "", account: "ACC-1004" },
 ];
 
 await writeFile("fixtures/catalogue.json", `${JSON.stringify(catalog, null, 2)}\n`);
 await writeFile("fixtures/customers.json", `${JSON.stringify(customers, null, 2)}\n`);
 
-const header = [
-  "Northgate Interiors",
-  "12 Harbour Road, Auckland",
-  "orders@northgate.example",
-  "Purchase order: PO-1042",
-];
-
-async function make(name, lines) {
+async function make(name, lines, { blank = false } = {}) {
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([595, 842]);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
@@ -40,13 +33,25 @@ async function make(name, lines) {
     page.drawText(line, { x: 60, y, size: 11, font, color: rgb(0.1, 0.1, 0.1) });
     y -= 18;
   }
+  if (blank) page.drawRectangle({ x: 60, y: 700, width: 300, height: 60, color: rgb(0.9, 0.9, 0.9) });
   await writeFile(`${out}/${name}.pdf`, await pdf.save());
 }
 
+function header({ company, email }) {
+  return [
+    company,
+    "12 Harbour Road, Auckland",
+    email,
+    "Purchase order: PO-1042",
+    "Date: 2026-11-02",
+    "Deliver to: 8 Rata Street, Wellington",
+  ];
+}
+
+const rata = { company: "Rata Design", email: "ap@rata.example" };
+
 await make("clean-order", [
-  ...header,
-  "Date: 2026-11-02",
-  "Deliver to: 8 Rata Street, Wellington",
+  ...header(rata),
   "",
   "Description                  Qty   Unit      Total",
   "Aurelia Weave 4417           2     120.00    240.00",
@@ -55,22 +60,23 @@ await make("clean-order", [
 ]);
 
 await make("letterhead", [
-  ...header,
+  "Northgate Interiors",
+  "12 Harbour Road, Auckland",
+  "orders@northgate.example",
+  "Purchase order: PO-1187",
   "Date: 2026-11-03",
-  "Deliver to: 8 Rata Street, Wellington",
-  "Buyer: buyer@kowhai.example",
+  "Deliver to: 21 Tui Road, Hamilton",
+  "Buyer: Kowhai Retail <buyer@kowhai.example>",
   "",
   "Description                  Qty   Unit      Total",
   "Aurelia Weave 4417           2     120.00    240.00",
 ]);
 
 await make("vague-line", [
-  ...header,
-  "Date: 2026-11-04",
-  "Deliver to: 8 Rata Street, Wellington",
+  ...header(rata),
   "",
   "Description                  Qty   Unit      Total",
-  "weave 4417                   3",
+  "Aurelia weave                3",
 ]);
 
 await make("statement", [
@@ -82,14 +88,12 @@ await make("statement", [
 ]);
 
 await make("credit-warning", [
-  ...header,
-  "Date: 2026-11-05",
-  "Deliver to: 8 Rata Street, Wellington",
+  ...header(rata),
   "",
   "Description                  Qty   Unit      Total",
   "Aurelia Weave 4417          99     120.00   11880.00",
 ]);
 
-await make("blank", []);
+await make("blank", [], { blank: true });
 
 console.log(`wrote six fixtures to ${out}`);
