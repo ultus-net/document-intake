@@ -1,6 +1,6 @@
 # Design: document-intake, a public template for document-to-record pipelines
 
-- Status: draft, awaiting operator approval
+- Status: approved 2026-11-20
 - Date: 2026-11-20
 - Owner: ultus-net (github.com/ultus-net/document-intake)
 - Licence: MIT
@@ -70,9 +70,11 @@ Three decisions carried across. These are what the README argues.
    resolves and the document type is clear, no model runs. The model is reserved
    for genuine judgement, and its output is merged with a reason per field.
 3. **A person in front of anything uncertain.** The model cannot say it is
-   unsure, so the pipeline gives it permission by routing to a hold queue. Every
-   order is reviewed by a person, by design. The system never guesses a value
-   that reaches the record.
+   unsure, so the pipeline gives it permission by routing to a hold queue. In
+   the real system a person still sees every order after it posts, which is how
+   a confident-but-wrong merge gets caught. The demo keeps that honest: `auto`
+   posts and stays in the queue marked for audit; `review` holds before posting.
+   The system never guesses a value that reaches the record.
 
 Two supporting patterns travel with them: an append-only event log keyed by
 correlation id, and a delayed verification pass, because a successful post is
@@ -115,7 +117,7 @@ document-intake/
   packages/core/             pipeline, gates, evidence, event log. No I/O.
   apps/demo/                 SvelteKit review UI, folder inbox, JSON stores
   fixtures/
-    documents/               four synthetic PDFs, one per outcome
+    documents/               six synthetic PDFs, one per outcome
     catalogue.json           fictional product catalogue
     customers.json           fictional customer directory
 ```
@@ -129,8 +131,14 @@ workspaces.
 - TypeScript, strict, Node 22. Same stack as the real system, so no new language
   to defend.
 - `packages/core` depends on `pdfjs-dist` for text extraction and nothing else.
-- `apps/demo` is SvelteKit, server routes calling `core`.
+- `apps/demo` is SvelteKit with `adapter-node`, server routes calling `core`.
+  `npm run demo` builds, drains the inbox once, then serves on
+  `localhost:4321`. It never opens a browser.
+- The system font stack only. No CDN fonts, no analytics, no network call in the
+  default path, so the demo looks the same on a machine with no egress.
 - Tests use the built-in `node:test`. No test framework dependency.
+- CI is GitHub Actions and headless: lint, typecheck, unit tests, then the demo
+  smoke run over HTTP. No browser automation.
 - Dependencies added beyond these need a one-line justification in the PR.
 
 ### Core types
@@ -141,7 +149,7 @@ These are the contract, and the reason the pipeline is reusable.
 type Outcome = "auto" | "review" | "reject";
 
 interface Evidence {
-  field: string;        // "customer.account", "line[2].product"
+  field: string;        // "field:purchaseOrder", "line:2:sku"
   value: unknown;
   source: string;       // "extractor:header", "catalogue:ref", "agent:merge"
   rule?: string;        // the named rule that produced or accepted it
@@ -161,14 +169,31 @@ interface Run {
   decision?: Decision;
   events: Event[];
 }
+
+interface Event {
+  seq: number;              // monotonic within the store
+  ts: string;               // ISO 8601 UTC
+  runId: string;
+  correlationId: string;
+  stage: Stage;
+  event: string;            // "extract.complete", "gate.hold", "post.written"
+  summary: string;          // one line, rendered in the UI verbatim
+  data?: Record<string, unknown>;
+}
 ```
+
+`var/events.jsonl` holds one event per line, append-only. `npm run demo --
+--fresh` truncates it and the record store. The UI reads only this file, so the
+audit trail and the screen cannot disagree.
 
 The invariant: nothing reaches the record store without a `Decision`. A field
 without evidence does not post.
 
 ### Seams
 
-Seven interfaces, all in `packages/core/src/ports.ts`:
+Eight interfaces, all in `packages/core/src/ports.ts`. Four are the integration
+seams an adopter replaces. Three support the pipeline: `Notifier`, `Clock`, and
+`EventLog`. One is optional: `Judge`, the only place a model may run.
 
 | Port | Demo implementation | Replaced by |
 |---|---|---|
@@ -179,11 +204,24 @@ Seven interfaces, all in `packages/core/src/ports.ts`:
 | `SystemOfRecord` | JSONL append store | ERP posting API |
 | `Notifier` | console | chat, email |
 | `Clock` | real time | fixed time in tests |
+| `EventLog` | JSONL append log | OpenTelemetry, a warehouse |
 
-The optional LLM extractor is one implementation behind `Extractor`, configured
-by an OpenAI-compatible base URL and key. Unset means never called. This keeps
-the claim "open frameworks" literal: no provider is load-bearing, including the
-demo's.
+Two judgement points, deliberately separate. `Extractor` turns a document into
+fields. `Judge` merges conflicting fields for a held run and returns a reason
+per field. Neither is required, and the demo ships a `Judge` that is configured
+but never called unless a line is held. This keeps the claim "open frameworks"
+literal: no provider is load-bearing, including the demo's.
+
+The demo is single-process. Every ingest, acceptance and append runs through one
+in-process queue, so a find-then-append cannot interleave with another request.
+`SystemOfRecord` appends one JSON line per record with no file lock, and the port
+says so: one writer, no cross-process concurrency. Anything else belongs to the
+adapter an adopter writes.
+
+The event log is the run store. Each event's `data` carries the payload needed to
+rebuild that run: the extracted document, the resolutions, the decision, and the
+operator's corrections. `rebuildRuns(events)` reduces them into the runs the UI
+shows, so a restart loses nothing and a held run can still be accepted.
 
 ### Pipeline
 
@@ -191,12 +229,24 @@ demo's.
 ingest -> extract -> resolve -> decide -> post -> verify
 ```
 
-- `ingest` hashes the document and derives the idempotency key. Re-processing
-  the same document is a no-op with an event saying so.
-- `extract` produces fields plus line items. Lines that are freight, fees or
-  notes are stripped by a named rule before matching.
+- `ingest` derives the idempotency key as
+  `sha256(len(messageId) + ":" + messageId + document bytes)`. The length prefix
+  keeps two different identifier and byte splits from colliding. `messageId` is
+  whatever the `Inbox` implementation treats as stable: a filename in the demo, a
+  Graph message id in production. The whole file is hashed and the bytes are not
+  normalised, so a re-saved PDF is a new document. A separate ingestion index
+  records every key seen, so a held or rejected document does not re-run.
+- `extract` produces fields plus line items. `Extractor` is async and returns a
+  whole-document result: a `status` of `ok`, `unreadable` or `not-a-document`,
+  the fields, and the lines. It does not stream, and it supplies confidence only
+  per field and only where the producer can honestly supply it. Lines that are
+  freight, fees or notes are stripped by a named rule before matching.
 - `resolve` matches lines against the catalogue and the document against the
   customer directory. Ambiguity is a first-class result, not an error.
+  Matching is deterministic and named. An exact manufacturer reference accepts.
+  Otherwise a trigram Jaccard score on the normalised name accepts at 0.82 or
+  above, holds between 0.55 and 0.82, and rejects below 0.55. The thresholds are
+  constants in one file, and the fixtures sit either side of the hold band.
 - `decide` applies the gates: validity (unreadable, non-order, empty), matching
   confidence, customer ambiguity, credit warning. Only unmatched or conflicting
   fields reach judgement, and only then does an agent run, if configured.
@@ -224,16 +274,23 @@ Visual language: reuse the operational dashboard's token architecture (paper,
 ink, accent, five status tones, flat-by-default, tabular numerals), rewritten
 for this repo. It reads as an instrument, not a landing page.
 
+The folder watcher is `fs.watch` with a 250ms debounce and no watcher
+dependency. On a platform where `fs.watch` is unreliable, the demo still drains
+the inbox at boot and on an explicit `POST /api/drain`, so the one-command path
+never depends on the watcher.
+
 ### Demo data
 
-Four synthetic documents from a fictional distributor, each forcing a different
+Six synthetic documents from a fictional distributor, each forcing a different
 outcome:
 
 | Document | Outcome | What it proves |
 |---|---|---|
 | clean order | auto | the short-circuit, zero model calls |
+| supplier letterhead | review | the two reads disagree |
 | vague product line | review | hold with the reason visible |
 | supplier statement | reject | the validity gate |
+| scanned, no text | reject | unreadable is not an empty order |
 | order over a credit limit | auto + warning | warnings inform, they do not block |
 
 Committed PDFs, generated once by a script in `scripts/`, small enough to live
@@ -267,7 +324,12 @@ in git.
 - An idempotency test: the same document twice yields one record and an event
   saying the second was skipped.
 - A golden event-trail test for the clean order.
-- A verification test: a record edited out of band is caught by `verify`.
+- A verification test. `verify` reports `ok`, `missing` or `drift`. It passes
+  only when every posted field still resolves to the same evidence and the
+  record still exists. The test writes a record out of band and expects `drift`.
+- A smoke test that starts the server, drains the inbox through the HTTP
+  endpoint, and asserts the queue returns the seeded runs with their outcomes.
+  Headless, no browser.
 - Fixtures are synthetic. Each fixture names its generator in a comment beside
   the test, since there is no real payload to cite.
 

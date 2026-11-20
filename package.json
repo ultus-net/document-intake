@@ -1,0 +1,30 @@
+{
+  "name": "document-intake",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "packageManager": "npm@11.20.0",
+  "scripts": {
+    "build": "npm run build -w @document-intake/core && npm run build -w @document-intake/demo",
+    "lint": "eslint .",
+    "typecheck": "npm run typecheck -w @document-intake/core && npm run typecheck -w @document-intake/demo",
+    "test": "npm run test -w @document-intake/core && npm run test -w @document-intake/demo",
+    "check": "npm run lint && npm run build && npm run typecheck && npm run test",
+    "verify": "npm run build -w @document-intake/core && node packages/core/dist/cli/verify.js",
+    "fixtures": "node scripts/make-fixtures.mjs",
+    "demo": "npm run build && HOST=127.0.0.1 PORT=${DEMO_PORT:-4321} node apps/demo/build/index.js"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "eslint": "10.15.0",
+    "pdf-lib": "1.17.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.73.0"
+  }
+}

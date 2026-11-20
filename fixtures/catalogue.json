@@ -1,0 +1,32 @@
+[
+  {
+    "sku": "CAR-4417",
+    "name": "Aurelia Weave 4417",
+    "manufacturerRef": "AW4417"
+  },
+  {
+    "sku": "CAR-2201",
+    "name": "Kowhai Broadloom",
+    "manufacturerRef": "KB2201"
+  },
+  {
+    "sku": "UND-100",
+    "name": "Underlay Standard",
+    "manufacturerRef": "US100"
+  },
+  {
+    "sku": "CAR-3300",
+    "name": "Rimu Twist",
+    "manufacturerRef": "RT3300"
+  },
+  {
+    "sku": "ACC-010",
+    "name": "Install Kit",
+    "manufacturerRef": "IK010"
+  },
+  {
+    "sku": "CAR-5500",
+    "name": "Tawa Loop",
+    "manufacturerRef": "TL5500"
+  }
+]
