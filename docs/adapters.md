@@ -170,7 +170,9 @@ interface Judge {
 ```
 
 It runs only when a line is held and a judge is configured. It returns fields plus evidence, never a
-bare value. The demo never configures one, so the default path makes no model call.
+bare value. Its merged fields and evidence replace the extracted fields on a new event, and the
+outcome stays `review`, so the person still decides. The demo never configures one, so the default
+path makes no model call.
 
 ## What verification can and cannot say
 

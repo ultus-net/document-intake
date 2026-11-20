@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { processDocument } from "./pipeline.js";
 import { idempotencyKey } from "./idempotency.js";
+import { rebuildRuns } from "./projection.js";
 import {
   ambiguousCustomerDoc, cleanDoc, freightOnlyDoc, happyDeps, overLimitDoc,
   scanDoc, statementDoc, textBytes, throwingJudge, vagueLineDoc, letterheadDoc,
@@ -77,4 +78,21 @@ test("a credit warning informs without blocking", async () => {
   const run = await processDocument(overLimitDoc(), happyDeps());
   assert.equal(run.decision?.outcome, "auto");
   assert.ok(run.decision?.reasons.includes("over credit limit"));
+});
+
+test("a configured judge runs once on a held run and its fields survive the projection", async () => {
+  const judge = {
+    merge: async () => ({
+      fields: { company: "Rata Design", purchaseOrder: "PO-1042" },
+      evidence: [{ field: "field:company", value: "Rata Design", source: "agent:merge" }],
+    }),
+  };
+  const deps = happyDeps({ judge });
+  const run = await processDocument(vagueLineDoc(), deps);
+  assert.equal(run.decision?.outcome, "review");
+  assert.equal(run.extracted?.fields.company, "Rata Design");
+  assert.ok((await deps.log.read()).some((event) => event.event === "judge.called"));
+  const [rebuilt] = rebuildRuns(await deps.log.read());
+  assert.equal(rebuilt?.extracted?.fields.company, "Rata Design");
+  assert.ok(rebuilt?.decision?.evidence.some((entry) => entry.source === "agent:merge"));
 });

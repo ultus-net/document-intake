@@ -77,7 +77,9 @@ verbatim:
 7. over the credit limit adds `over credit limit` and does not block
 
 The short-circuit is deliberate: `auto` is emitted with `modelCalls: 0`, and the optional `Judge` is
-called only when a line is held and a judge is configured.
+called only when a line is held and a judge is configured. Its merged fields and evidence become the
+run's, and the outcome stays `review`, so a person still decides. The demo configures no judge, so
+its default path makes no model call.
 
 ## Matching and identity
 

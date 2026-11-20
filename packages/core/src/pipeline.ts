@@ -86,8 +86,29 @@ export async function processDocument(doc: SourceDocument, deps: Deps): Promise<
     data: { decision, modelCalls: 0 },
   });
 
-  const decided = { ...run, stage: "decide" as const, extracted, decision };
-  if (decision.outcome !== "auto") return decided;
+  let finalExtracted = extracted;
+  let finalDecision = decision;
+  if (decision.outcome === "review" && deps.judge !== undefined) {
+    const merged = await deps.judge.merge({ fields: extracted.fields, reasons: decision.reasons });
+    finalExtracted = { ...extracted, fields: merged.fields };
+    finalDecision = { ...decision, evidence: [...decision.evidence, ...merged.evidence] };
+    await deps.log.append({
+      runId: run.id,
+      correlationId: run.correlationId,
+      stage: "decide",
+      event: "judge.called",
+      summary: `${merged.evidence.length} fields merged for the person`,
+      data: { decision: finalDecision, extracted: finalExtracted },
+    });
+  }
+
+  const decided = {
+    ...run,
+    stage: "decide" as const,
+    extracted: finalExtracted,
+    decision: finalDecision,
+  };
+  if (finalDecision.outcome !== "auto") return decided;
 
   const posted = await postRecord(decided, deps);
   return { ...decided, stage: "post", posted };
