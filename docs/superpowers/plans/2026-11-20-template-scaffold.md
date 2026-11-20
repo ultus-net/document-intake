@@ -4,60 +4,88 @@
 
 **Goal:** Ship a public, runnable TypeScript template that takes a document from an inbox to a system of record, holding anything uncertain for a person, with an evidence trail for every field.
 
-**Architecture:** `packages/core` is a pure library: ports, stages, gates, matching, event log and verification, with in-memory fakes and no I/O. `apps/demo` is a SvelteKit app that wires folder and JSONL adapters into core and renders the review queue. `fixtures/` holds four synthetic documents, one per outcome.
+**Architecture:** `packages/core` is a pure library: ports, stages, gates, matching, event log, run projection and verification, with in-memory fakes and no I/O. `apps/demo` is a SvelteKit app that wires folder and JSONL adapters into core and renders the review queue. `fixtures/` holds six synthetic documents, one per outcome.
 
-**Tech Stack:** Node 22, TypeScript strict, npm workspaces, `node:test`, `pdfjs-dist`, `pdf-lib` (fixtures only), SvelteKit with `adapter-node`.
+**Tech Stack:** Node 22, TypeScript strict, npm workspaces, `node:test`, `pdfjs-dist` (pinned), `pdf-lib` (fixtures only, pinned), SvelteKit with `adapter-node`, `svelte-check`.
 
 **Spec:** `docs/superpowers/specs/2026-11-20-template-design.md`
 
 ## Global Constraints
 
-- Node 22, TypeScript strict, ESM. `packages/core` targets Node only.
-- `packages/core` runtime dependency is `pdfjs-dist` and nothing else. Any other dependency needs a one-line justification in the PR.
-- Tests are `node:test`. Compile first, run `node --test dist`.
-- Default path runs offline: no key, no account, no network.
-- No client identifier in code, fixtures, docs, or commit history.
-- The demo is single-process and single-writer. No locking.
+- Node 22, enforced by `engines` and `.nvmrc`. TypeScript strict, ESM, `NodeNext`.
+- `packages/core` runtime dependency is `pdfjs-dist` and nothing else, pinned exact.
+  Any other dependency needs a one-line justification in the PR.
+- Every dependency is pinned exact and `package-lock.json` is committed, because CI
+  runs `npm ci`. `packageManager` names the npm version.
+- `npm ci` is the only step that needs the network. Everything after it runs offline.
+- `npm run check` is the gate: lint, typecheck, Svelte check, tests. `npm run verify`
+  is the delayed record-verification pass. The two names never swap.
+- Tests are `node:test`. Core tests compile first and run `node --test dist`.
+- No client identifier in code, fixtures, docs, or commit history. The term list
+  lives in the operator's notes, never in this repo.
+- The demo is single-process. Every ingest, accept and append runs through one
+  in-process queue. No file locks.
+- Matching thresholds: `>= 0.82` accept, `0.55 .. 0.82` hold, `< 0.55` reject.
+- Idempotency key: `sha256(len(messageId) + ":" + messageId + bytes)`, hex.
+- Event `ts` is ISO-8601 UTC. Generated state lives under `var/`, gitignored,
+  overridable with `INTAKE_STATE_DIR`.
+- System font stack only. No vendored or downloaded fonts.
 - Licence MIT, `CHANGELOG.md` from the first commit.
-- All generated state lives under `var/` and is gitignored.
-- Event `ts` is ISO-8601 UTC. Matching thresholds are `>= 0.82` accept, `0.55 .. 0.82` hold, `< 0.55` reject.
-- Idempotency key is `sha256(messageId + document bytes)`, hex, no normalisation.
 
 ## Review Focus
 
-- A non-PDF file (`.docx`, `.png`) lands in the inbox. Expect a `reject` with a plain reason, never a crash or a stack trace in the UI.
-- A PDF with no extractable text (a scan) arrives. Expect `unreadable` and a hold-for-a-person reason, not an empty order that posts.
-- The same message is delivered twice. Expect one record and an `ingest.duplicate` event.
-- A document whose lines are all freight or fee rows. Expect `reject` with reason `no matchable lines`, not a zero-line post.
-- Two customers share a normalised name. Expect `review` with `ambiguous customer`, never the first match.
+- A non-PDF file (`.docx`, `.png`) lands in the inbox. Expect `reject` with a plain
+  reason, never a crash or a stack trace in the UI.
+- A corrupt PDF lands in the inbox. Expect `reject`, never an unhandled parser throw.
+- A PDF with no extractable text (a scan) arrives. Expect `reject`, reason
+  `could not read the document`, matching the design's validity gate.
+- The same message is delivered twice. Expect one record or one held run, and an
+  `ingest.duplicate` event, including for held and rejected documents.
+- A document whose lines are all freight or fee rows. Expect `reject` with reason
+  `no matchable lines`, not a zero-line post.
+- Two customers share a normalised name. Expect `review` with `ambiguous customer`,
+  never the first match.
 
 ---
 
-### Task 1: Workspace, gates, and licence
+### Task 1: Workspace, pinned dependencies, gates, and CI
 
 **Files:**
-- Create: `package.json`, `tsconfig.base.json`, `eslint.config.mjs`, `.gitignore`, `LICENSE`, `CHANGELOG.md`, `.github/workflows/ci.yml`
+- Create: `package.json`, `tsconfig.base.json`, `eslint.config.mjs`, `.gitignore`, `.nvmrc`, `LICENSE`, `CHANGELOG.md`, `.github/workflows/ci.yml`
 - Create: `packages/core/package.json`, `packages/core/tsconfig.json`, `packages/core/src/index.ts`, `packages/core/src/index.test.ts`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `VERSION: string` from `@document-intake/core`. Scripts `lint`, `typecheck`, `test` at the root.
+- Produces: `VERSION: string` from `@document-intake/core`. Root scripts `build`, `check`, `lint`, `typecheck`, `test`, `verify`, `demo`, `fixtures`.
 
 - [ ] **Step 1: Create the workspace files**
 
-Root `package.json`: `"private": true`, `"workspaces": ["packages/*", "apps/*"]`, `"engines": {"node": ">=22"}`, `"type": "module"`. Scripts: `lint` = `eslint .`, `typecheck` = `npm run typecheck --workspaces --if-present`, `test` = `npm run test --workspaces --if-present`, `verify` = `npm run lint && npm run typecheck && npm run test`.
+Root `package.json`: `"private": true`, `"type": "module"`, `"workspaces": ["packages/*", "apps/*"]`, `"engines": {"node": ">=22"}`, `"packageManager": "npm@10.9.0"`. Scripts:
+
+```json
+{
+  "build": "npm run build --workspaces --if-present",
+  "lint": "eslint .",
+  "typecheck": "npm run typecheck --workspaces --if-present",
+  "test": "npm run test --workspaces --if-present",
+  "check": "npm run lint && npm run typecheck && npm run test",
+  "verify": "npm run build -w @document-intake/core && node packages/core/dist/cli/verify.js",
+  "fixtures": "node scripts/make-fixtures.mjs",
+  "demo": "npm run build && HOST=127.0.0.1 PORT=${DEMO_PORT:-4321} node apps/demo/build/index.js"
+}
+```
 
 `tsconfig.base.json`: `target` `ES2022`, `module` `NodeNext`, `moduleResolution` `NodeNext`, `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `exactOptionalPropertyTypes`, `outDir` `dist`, `rootDir` `src`, `declaration`.
 
-`packages/core/tsconfig.json` extends the base. `packages/core/package.json`: name `@document-intake/core`, `"exports": {".": "./dist/index.js"}`, `"types": "./dist/index.d.ts"`, scripts `build` = `tsc -p tsconfig.json`, `typecheck` = `tsc -p tsconfig.json --noEmit`, `test` = `npm run build && node --test dist`.
+`packages/core/package.json`: name `@document-intake/core`, `"type": "module"`, `"exports": {".": "./dist/index.js"}`, `"types": "./dist/index.d.ts"`, `dependencies` `{"pdfjs-dist": "5.4.149"}`, devDependencies `typescript` pinned. Scripts `build`, `typecheck`, `test` = `npm run build && node --test dist`.
 
-`eslint.config.mjs`: flat config, `typescript-eslint` recommended, ignore `dist`, `.svelte-kit`, `node_modules`, `var`.
+`eslint.config.mjs`: flat config with pinned `typescript-eslint`, ignoring `dist`, `.svelte-kit`, `node_modules`, `var`, and `apps/demo/src/**/*.svelte`. Svelte files are type-checked by `svelte-check` in Task 10, so the lint gate stays dependency-light.
 
 `.gitignore`: `node_modules/`, `dist/`, `.svelte-kit/`, `var/`, `.env`.
+`.nvmrc`: `22`. `LICENSE`: MIT, `Copyright (c) 2026 ultus-net`.
+`CHANGELOG.md`: `# Changelog`, then `## 0.1.0 (unreleased)`.
 
-`LICENSE`: MIT, `Copyright (c) 2026 ultus-net`. `CHANGELOG.md`: `# Changelog` then `## 0.1.0 (unreleased)` with one line naming this plan.
-
-`.github/workflows/ci.yml`: on push and pull_request, Node 22, `npm ci`, `npm run verify`.
+`.github/workflows/ci.yml`: on push and pull_request, Node 22 from `.nvmrc`, `npm ci`, `npm run build`, `npm run check`, then `node --test apps/demo/tests/smoke.test.js`.
 
 - [ ] **Step 2: Write the failing smoke test**
 
@@ -74,45 +102,38 @@ test("exports a version", () => assert.equal(VERSION, "0.1.0"));
 - [ ] **Step 3: Run it to see it fail**
 
 Run: `npm test -w @document-intake/core`
-Expected: FAIL, `Cannot find module './index.js'` or missing export.
+Expected: FAIL, `Cannot find module './index.js'` or a missing export.
 
 - [ ] **Step 4: Add the export**
 
 `packages/core/src/index.ts`: `export const VERSION = "0.1.0";`
 
-- [ ] **Step 5: Run the gates**
+- [ ] **Step 5: Run the gates and commit**
 
-Run: `npm run verify`
-Expected: lint clean, typecheck clean, 1 test passing.
-
-- [ ] **Step 6: Commit**
+Run: `npm run check`
+Expected: lint, typecheck and all tests pass.
 
 ```bash
 git add -A
-git commit -m "chore: scaffold the workspace and its gates"
+git commit -m "chore: scaffold the workspace, pinned deps, and its gates"
 ```
 
 ---
 
-### Task 2: Types, errors, and the event log
+### Task 2: Types, errors, the event log, and the serial queue
 
 **Files:**
-- Create: `packages/core/src/types.ts`, `packages/core/src/errors.ts`, `packages/core/src/events.ts`, `packages/core/src/events.test.ts`
+- Create: `packages/core/src/types.ts`, `packages/core/src/errors.ts`, `packages/core/src/events.ts`, `packages/core/src/queue.ts`, `packages/core/src/fakes.ts`, `packages/core/src/events.test.ts`, `packages/core/src/queue.test.ts`
 
 **Interfaces:**
-- Consumes: `Clock` from `ports.ts` (created here as part of types? No: `ports.ts` is Task 3; declare `Clock` in `types.ts` and re-export from `ports.ts` later).
-- Produces: `Outcome`, `Stage`, `Evidence`, `Decision`, `Event`, `EventLog`, `MemoryEventLog`, `IntakeError`, `PostedRecord`.
+- Consumes: `Clock` declared in `types.ts`.
+- Produces: `Outcome`, `Stage`, `Evidence`, `Decision`, `Event`, `EventLog`, `MemoryEventLog`, `IntakeError`, `PostedRecord`, `Run`, `createQueue(): <T>(fn: () => Promise<T>) => Promise<T>`, `fixedClock(iso: string): Clock`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 `events.test.ts`:
 
 ```ts
-import test from "node:test";
-import assert from "node:assert/strict";
-import { MemoryEventLog } from "./events.js";
-import { fixedClock } from "./fakes.js";
-
 test("assigns monotonic seq and clock timestamps", async () => {
   const log = new MemoryEventLog(fixedClock("2026-01-02T03:04:05Z"));
   await log.append({ runId: "r1", correlationId: "c1", stage: "ingest",
@@ -126,68 +147,86 @@ test("assigns monotonic seq and clock timestamps", async () => {
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
-
-Run: `npm test -w @document-intake/core`
-Expected: FAIL, cannot resolve `./events.js`.
-
-- [ ] **Step 3: Implement `types.ts`, `errors.ts`, `fakes.ts`, `events.ts`**
-
-`types.ts` carries the interfaces quoted in the spec's "Core types", plus:
+`queue.test.ts`:
 
 ```ts
+test("serialises interleaved work", async () => {
+  const run = createQueue();
+  const order: string[] = [];
+  await Promise.all([
+    run(async () => { order.push("a1"); await new Promise((r) => setTimeout(r, 10)); order.push("a2"); }),
+    run(async () => { order.push("b1"); order.push("b2"); }),
+  ]);
+  assert.deepEqual(order, ["a1", "a2", "b1", "b2"]);
+});
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `npm test -w @document-intake/core`
+Expected: FAIL, `./events.js` and `./queue.js` not found.
+
+- [ ] **Step 3: Implement**
+
+`types.ts` carries the spec's types plus:
+
+```ts
+export interface Clock { now(): Date; }
+export interface DocumentRef { messageId: string; filename: string; receivedAt: string; }
+export interface SourceDocument extends DocumentRef { bytes: Uint8Array; }
+export interface LineItem {
+  description: string; quantity: number; unitPrice?: number; lineTotal?: number;
+}
+export interface ExtractedDocument {
+  status: "ok" | "unreadable" | "not-a-document";
+  fields: Record<string, string>;
+  identity: Record<string, string>;   // the independent second read
+  lines: LineItem[];
+}
+export interface EventInput {
+  runId: string; correlationId: string; stage: Stage; event: string;
+  summary: string; data?: Record<string, unknown>;
+}
 export interface PostedRecord {
   idempotencyKey: string; runId: string; postedAt: string;
   fields: Record<string, unknown>;
   lines: Array<{ sku: string; quantity: number }>;
   decision: Decision;
 }
+export interface Run {
+  id: string; correlationId: string; stage: Stage;
+  document?: DocumentRef; extracted?: ExtractedDocument;
+  decision?: Decision; duplicate?: boolean; posted?: PostedRecord;
+}
 ```
 
-```ts
-export interface Clock { now(): Date; }
-export interface SourceDocument {
-  messageId: string; filename: string; bytes: Uint8Array; receivedAt: string;
-}
-export interface LineItem {
-  description: string; quantity: number; unitPrice?: number; lineTotal?: number;
-}
-export interface ExtractedDocument {
-  status: "ok" | "unreadable" | "not-a-document";
-  fields: Record<string, string>; lines: LineItem[];
-}
-export interface EventInput { runId: string; correlationId: string; stage: Stage;
-  event: string; summary: string; data?: Record<string, unknown>; }
-```
+`errors.ts`: `IntakeError` with `readonly code: string` and `name = "IntakeError"`.
+`events.ts`: `MemoryEventLog` with `append`, `read`, `entries`; `seq` from 0; `ts` from the clock.
+`queue.ts`: `createQueue()` chains each call onto a stored promise, so a rejection does not break the chain.
+`fakes.ts`: `fixedClock`, plus in-memory ports added in Task 3.
 
-`errors.ts`: `export class IntakeError extends Error { constructor(readonly code: string, message: string) { super(message); this.name = "IntakeError"; } }`.
-
-`fakes.ts`: `fixedClock(iso: string): Clock`, whose `now()` returns a new `Date` each call.
-
-`events.ts`: `MemoryEventLog` with `append`, `read`, `entries`. `seq` starts at 0. `ts` is `clock.now().toISOString()`. `append` returns the stored event, `read` returns a copy.
-
-- [ ] **Step 4: Run it to see it pass**
+- [ ] **Step 4: Run them to see them pass**
 
 Run: `npm test -w @document-intake/core`
-Expected: 2 tests passing.
+Expected: all tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/core/src
-git commit -m "feat: add core types, typed errors, and the event log"
+git commit -m "feat: add core types, event log, typed errors, and the serial queue"
 ```
 
 ---
 
-### Task 3: Matching and thresholds
+### Task 3: Matching and the port contracts
 
 **Files:**
 - Create: `packages/core/src/matching.ts`, `packages/core/src/matching.test.ts`, `packages/core/src/ports.ts`
 
 **Interfaces:**
-- Consumes: nothing.
-- Produces: `normalise(text: string): string`, `trigramScore(a: string, b: string): number`, `classify(score: number, exactReference: boolean): "accept" | "hold" | "reject"`, `THRESHOLDS`, and every port interface: `Inbox`, `Extractor`, `Catalogue`, `CustomerDirectory`, `SystemOfRecord`, `Notifier`, `Clock`, `EventLog`, `Deps`.
+- Consumes: `Clock` and `EventLog` from `types.ts`.
+- Produces: `normalise(text: string): string`, `trigramScore(a: string, b: string): number`, `classify(score: number, exactReference: boolean): "accept" | "hold" | "reject"`, `THRESHOLDS`, `Inbox`, `Extractor`, `Catalogue`, `CustomerDirectory`, `SystemOfRecord`, `Notifier`, `EventLog`, `Judge`, `Deps`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -212,24 +251,50 @@ test("classify honours the spec thresholds", () => {
 Run: `npm test -w @document-intake/core`
 Expected: FAIL, `normalise is not a function`.
 
-- [ ] **Step 3: Implement `matching.ts` and `ports.ts`**
+- [ ] **Step 3: Implement**
 
-`normalise`: `NFKD`, strip combining marks, lowercase, replace every run of non `[a-z0-9]` with a space, trim. `trigramScore`: Jaccard over the sets of 3-character substrings of each normalised string. `THRESHOLDS = { accept: 0.82, hold: 0.55 } as const`. `classify` returns `accept` when `exactReference` or `score >= accept`, `hold` when `score >= hold`, else `reject`.
+`normalise`: `NFKD`, strip combining marks, lowercase, replace runs of non `[a-z0-9]` with one space, trim. `trigramScore`: Jaccard over 3-character substring sets. `THRESHOLDS = { accept: 0.82, hold: 0.55 } as const`.
 
-`ports.ts` declares the seven port interfaces from the spec plus `EventLog`, and:
+`ports.ts` declares:
 
 ```ts
+export interface Inbox { list(): Promise<SourceDocument[]>; }
+export interface Extractor { extract(doc: SourceDocument): Promise<ExtractedDocument>; }
+export interface MatchResult { sku?: string; score: number; exactReference: boolean; rule: string; }
+export interface Catalogue { match(description: string): Promise<MatchResult>; }
+export interface ResolvedCustomer {
+  account?: string; score: number; ambiguous: boolean;
+  creditLimitCents?: number; openBalanceCents?: number;
+}
+export interface CustomerDirectory {
+  resolve(doc: SourceDocument, fields: Record<string, string>, identity: Record<string, string>): Promise<ResolvedCustomer>;
+}
+export interface SystemOfRecord {
+  find(key: string): Promise<PostedRecord | undefined>;
+  append(record: PostedRecord): Promise<void>;
+  list(): Promise<PostedRecord[]>;          // may hold several revisions per key
+}
+export interface Notifier { notify(message: string): void; }
+export interface EventLog {
+  append(input: EventInput): Promise<Event>;
+  read(): Promise<Event[]>;
+}
+export interface Judge {
+  merge(input: { fields: Record<string, string>; reasons: string[] }): Promise<{
+    fields: Record<string, string>; evidence: Evidence[];
+  }>;
+}
 export interface Deps {
   inbox: Inbox; extractor: Extractor; catalogue: Catalogue;
   directory: CustomerDirectory; record: SystemOfRecord;
-  notifier: Notifier; clock: Clock; log: EventLog;
+  notifier: Notifier; clock: Clock; log: EventLog; judge?: Judge;
 }
 ```
 
 - [ ] **Step 4: Run it to see it pass**
 
 Run: `npm test -w @document-intake/core`
-Expected: 5 tests passing.
+Expected: all tests pass.
 
 - [ ] **Step 5: Commit**
 
@@ -240,55 +305,62 @@ git commit -m "feat: add trigram matching and the port contracts"
 
 ---
 
-### Task 4: Ingest, idempotency, and the duplicate path
+### Task 4: Ingest, idempotency, and the ingestion index
 
 **Files:**
-- Create: `packages/core/src/idempotency.ts`, `packages/core/src/pipeline.ts`, `packages/core/src/fakes.ts` (extend), `packages/core/src/pipeline.test.ts`
+- Create: `packages/core/src/idempotency.ts`, `packages/core/src/pipeline.ts`, `packages/core/src/pipeline.test.ts`, `packages/core/src/fakes.ts` (extend)
 
 **Interfaces:**
-- Consumes: `Deps`, `SourceDocument`, `EventLog`, `SystemOfRecord`.
-- Produces: `idempotencyKey(doc: {messageId: string; bytes: Uint8Array}): string`, `processDocument(doc: SourceDocument, deps: Deps): Promise<Run>`, where `Run` gains `duplicate?: boolean`.
+- Consumes: `Deps`, `SourceDocument`, `EventLog`.
+- Produces: `idempotencyKey(doc: { messageId: string; bytes: Uint8Array }): string`, `processDocument(doc: SourceDocument, deps: Deps): Promise<Run>`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 ```ts
-test("the same message twice yields one record and a duplicate event", async () => {
+test("the same message twice yields one run and a duplicate event", async () => {
   const deps = happyDeps();
   const first = await processDocument(cleanDoc(), deps);
   const second = await processDocument(cleanDoc(), deps);
   assert.equal(first.duplicate, undefined);
   assert.equal(second.duplicate, true);
-  assert.equal((await deps.record.list()).length, 1);
+  assert.equal((await deps.log.read()).filter((e) => e.event === "ingest.accepted").length, 1);
   assert.ok((await deps.log.read()).some((e) => e.event === "ingest.duplicate"));
 });
-test("a changed byte changes the key", () => {
-  assert.notEqual(idempotencyKey(docA()), idempotencyKey(docB()));
+test("a held document is not re-run", async () => {
+  const deps = happyDeps();
+  await processDocument(vagueLineDoc(), deps);   // ends held, nothing posted
+  assert.equal((await processDocument(vagueLineDoc(), deps)).duplicate, true);
+});
+test("the length prefix prevents key collisions", () => {
+  const a = idempotencyKey({ messageId: "ab", bytes: utf8("c") });
+  const b = idempotencyKey({ messageId: "a", bytes: utf8("bc") });
+  assert.notEqual(a, b);
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [ ] **Step 2: Run them to see them fail**
 
 Run: `npm test -w @document-intake/core`
 Expected: FAIL, `processDocument is not a function`.
 
 - [ ] **Step 3: Implement**
 
-`idempotency.ts` uses `node:crypto` `createHash("sha256")`, updating with the messageId bytes then the document bytes, hex output.
+`idempotency.ts` hashes the decimal length of the messageId, a colon, the messageId, then the bytes, with `node:crypto` `createHash("sha256")`, hex.
 
-`pipeline.ts` orchestrates; `processDocument` computes the key, checks `deps.record.find`, emits `ingest.duplicate` and returns early when found, otherwise emits `ingest.accepted` and continues into the stages added by Task 5.
+`pipeline.ts` computes the key, then treats it as duplicate when `deps.record.find(key)` resolves or when `deps.log.read()` holds an `ingest.accepted` event whose `data.key` equals it. Duplicate emits `ingest.duplicate` and returns `{ ...run, duplicate: true }`. Otherwise emits `ingest.accepted` with `data.key`, attaches the document, and continues into the stages from Task 5.
 
-`fakes.ts` gains in-memory implementations of every port: `memoryRecord`, `memoryInbox`, `stubExtractor`, `stubCatalogue`, `stubDirectory`, `consoleNotifier`, and a `happyDeps()` builder wired to `cleanDoc()`.
+`fakes.ts` gains in-memory implementations of every port, plus `happyDeps()` and the document builders (`cleanDoc`, `vagueLineDoc`, `scanDoc`, `freightOnlyDoc`, `ambiguousCustomerDoc`, `overLimitDoc`, `letterheadDoc`). `memoryRecord` exposes `clear()` for the verification test.
 
-- [ ] **Step 4: Run it to see it pass**
+- [ ] **Step 4: Run them to see them pass**
 
 Run: `npm test -w @document-intake/core`
-Expected: 7 tests passing.
+Expected: all tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/core/src
-git commit -m "feat: add ingest and idempotent duplicate handling"
+git commit -m "feat: add ingest, the ingestion index, and idempotent duplicates"
 ```
 
 ---
@@ -296,19 +368,24 @@ git commit -m "feat: add ingest and idempotent duplicate handling"
 ### Task 5: Resolve, decide, and the gates
 
 **Files:**
-- Create: `packages/core/src/stages/resolve.ts`, `packages/core/src/stages/decide.ts`, `packages/core/src/pipeline.test.ts` (extend)
+- Create: `packages/core/src/stages/resolve.ts`, `packages/core/src/stages/decide.ts`, `packages/core/src/stages/resolve.test.ts`, `packages/core/src/pipeline.test.ts` (extend)
 
 **Interfaces:**
-- Consumes: `Catalogue.match(description)`, `CustomerDirectory.resolve(doc, fields)`, `classify`.
-- Produces: `resolveLines(lines, catalogue): Promise<ResolvedLine[]>`, `decide(input): Decision`, `ResolvedCustomer { account?: string; score: number; ambiguous: boolean; creditLimitCents?: number; openBalanceCents?: number }`.
+- Consumes: `Catalogue.match`, `CustomerDirectory.resolve`, `classify`, `Judge`.
+- Produces: `resolveLines(lines: LineItem[], catalogue: Catalogue): Promise<ResolvedLine[]>`, `ResolvedLine { line: LineItem; sku?: string; score: number; rule: string; }`, `decide(input: DecideInput): Decision`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-test("unreadable documents reject with a plain reason", async () => {
-  const run = await processDocument(scanDoc(), unreadableDeps());
+test("an unreadable document rejects with a plain reason", async () => {
+  const run = await processDocument(scanDoc(), happyDeps());
   assert.equal(run.decision?.outcome, "reject");
-  assert.match(run.decision!.reasons[0]!, /could not read/i);
+  assert.ok(run.decision!.reasons.includes("could not read the document"));
+});
+test("a non-document rejects", async () => {
+  const run = await processDocument(statementDoc(), happyDeps());
+  assert.equal(run.decision?.outcome, "reject");
+  assert.ok(run.decision!.reasons.includes("not a document we can process"));
 });
 test("a held line holds the run", async () => {
   const run = await processDocument(vagueLineDoc(), happyDeps());
@@ -316,9 +393,16 @@ test("a held line holds the run", async () => {
   assert.ok(run.decision!.reasons.includes("line 1 needs a person"));
 });
 test("all-resolved lines auto-post with no judge call", async () => {
-  const judge = { review: () => { throw new Error("judge must not run"); } };
-  const run = await processDocument(cleanDoc(), happyDeps({ judge }));
+  const judge = { merge: () => { throw new Error("judge must not run"); } };
+  const deps = happyDeps({ judge });
+  const run = await processDocument(cleanDoc(), deps);
   assert.equal(run.decision?.outcome, "auto");
+  assert.ok((await deps.log.read()).every((e) => e.event !== "judge.called"));
+});
+test("a disagreement between the two reads holds", async () => {
+  const run = await processDocument(letterheadDoc(), happyDeps());
+  assert.equal(run.decision?.outcome, "review");
+  assert.ok(run.decision!.reasons.includes("extractor and identity read disagree"));
 });
 test("an ambiguous customer holds", async () => {
   const run = await processDocument(ambiguousCustomerDoc(), happyDeps());
@@ -342,24 +426,22 @@ test("a credit warning informs without blocking", async () => {
 Run: `npm test -w @document-intake/core`
 Expected: FAIL on the first new test.
 
-- [ ] **Step 3: Implement `resolve.ts` and `decide.ts`**
+- [ ] **Step 3: Implement**
 
-`resolve.ts` strips service rows by name (`freight`, `delivery`, `fee`, `surcharge`, `note`) before matching, then calls `catalogue.match` per line and maps through `classify`. Empty matchable set is a named result, not an exception.
+`resolve.ts` removes service rows by name (`freight`, `delivery`, `fee`, `surcharge`, `note`), matches the rest, and returns them tagged with `classify(...)` as the rule.
 
-`decide.ts` applies gates in this order: extractor status, empty matchable lines, held or rejected lines, customer ambiguity, then credit. Each reason string is fixed copy asserted by the tests. Credit never blocks.
-
-`Deps` gains optional `judge?: Judge`, where `Judge.review` returns merged fields plus evidence. It is called only when a line is held and a judge exists.
+`decide.ts` runs the gates in this order, appending fixed reason strings: extractor status, empty matchable set, held or rejected lines, extractor and identity disagreement, customer ambiguity, then credit. Credit adds `over credit limit` and never blocks. When a line is held and `deps.judge` exists, call it once, emit `judge.called`, and merge its fields and evidence. `auto` emits `decide.shortcircuit` with `data.modelCalls = 0`; every other path emits `decide.hold` or `decide.reject`.
 
 - [ ] **Step 4: Run them to see them pass**
 
 Run: `npm test -w @document-intake/core`
-Expected: 13 tests passing.
+Expected: all tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/core/src
-git commit -m "feat: add resolution, gates, and the deterministic short-circuit"
+git commit -m "feat: add resolution, the gates, and the short-circuit"
 ```
 
 ---
@@ -367,11 +449,11 @@ git commit -m "feat: add resolution, gates, and the deterministic short-circuit"
 ### Task 6: Post, the evidence invariant, and verification
 
 **Files:**
-- Create: `packages/core/src/stages/post.ts`, `packages/core/src/verify.ts`, `packages/core/src/post.test.ts`, `packages/core/src/verify.test.ts`
+- Create: `packages/core/src/stages/post.ts`, `packages/core/src/verify.ts`, `packages/core/src/post.test.ts`, `packages/core/src/verify.test.ts`, `packages/core/src/cli/verify.ts`
 
 **Interfaces:**
-- Consumes: `SystemOfRecord.append`, `SystemOfRecord.list`, `Clock`.
-- Produces: `postRecord(run, deps): Promise<PostedRecord>`, `verifyAll(deps, olderThanHours: number): Promise<VerifyResult[]>`, `VerifyResult { runId: string; status: "ok" | "missing" | "drift"; detail: string }`.
+- Consumes: `SystemOfRecord`, `Clock`, `EventLog`.
+- Produces: `postRecord(run: Run, deps: Deps): Promise<PostedRecord>`, `verifyAll(deps: Deps, olderThanHours: number): Promise<VerifyResult[]>`, `VerifyResult { key: string; runId: string; status: "ok" | "missing" | "drift"; detail: string }`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -381,22 +463,36 @@ test("the clean order's event trail is stable", async () => {
   await processDocument(cleanDoc(), deps);
   assert.deepEqual((await deps.log.read()).map((e) => e.event), [
     "ingest.accepted", "extract.complete", "resolve.lines",
-    "decide.auto", "post.written",
+    "decide.shortcircuit", "post.written",
   ]);
 });
-test("post refuses a field with no evidence", async () => {
+test("one document yields one posted record", async () => {
+  const deps = happyDeps();
+  await processDocument(cleanDoc(), deps);
+  await processDocument(cleanDoc(), deps);
+  assert.equal((await deps.record.list()).length, 1);
+});
+test("post refuses a value with no matching evidence", async () => {
   await assert.rejects(
-    () => postRecord(runWithoutEvidence(), happyDeps()),
+    () => postRecord(runWithStaleEvidence(), happyDeps()),
     (e: unknown) => e instanceof IntakeError && e.code === "no-evidence",
   );
 });
-test("verify reports drift after an out-of-band edit", async () => {
+test("verify reports drift for the latest revision of a key", async () => {
   const deps = happyDeps();
   await processDocument(cleanDoc(), deps);
   const [record] = await deps.record.list();
-  await deps.record.append({ ...record!, fields: { ...record!.fields, customer: "WRONG" } });
+  await deps.record.append({ ...record!, fields: { ...record!.fields, purchaseOrder: "WRONG" } });
+  const results = await verifyAll(deps, 0);
+  assert.equal(results.length, 1);
+  assert.equal(results[0]!.status, "drift");
+});
+test("verify reports a missing record", async () => {
+  const deps = happyDeps();
+  await processDocument(cleanDoc(), deps);
+  await deps.record.clear();
   const [result] = await verifyAll(deps, 0);
-  assert.equal(result!.status, "drift");
+  assert.equal(result!.status, "missing");
 });
 ```
 
@@ -407,14 +503,14 @@ Expected: FAIL, `postRecord is not a function`.
 
 - [ ] **Step 3: Implement**
 
-`post.ts` asserts every field in the posted shape appears in `decision.evidence`, throwing `IntakeError("no-evidence", ...)` otherwise, then appends `PostedRecord` and emits `post.written`. The duplicate path is settled by `find` before append.
+`post.ts` builds one evidence entry per posted value, keyed by path: every field as `field:<name>`, every line as `line:<index>:sku` and `line:<index>:quantity`. It then asserts each posted value has an evidence entry with the same value, throwing `IntakeError("no-evidence", ...)` otherwise. Operator corrections are evidence with `source: "operator:correction"`. On success it appends and emits `post.written`.
 
-`verify.ts` replays each record's decision against the stored record: `missing` when the key is gone, `drift` when any evidenced field differs, `ok` otherwise. Emits `verify.*`.
+`verify.ts` reads the `post.written` keys and timestamps from the event log, selects the keys older than the threshold, and compares each against the latest revision in the store. So `missing` means the log says it posted and the store no longer holds it, which is the case that matters. A differing field is `drift`; otherwise `ok`. `cli/verify.ts` prints the table.
 
 - [ ] **Step 4: Run them to see them pass**
 
-Run: `npm test -w @document-intake/core`
-Expected: 15 tests passing.
+Run: `npm test -w @document-intake/core && npm run verify`
+Expected: all tests pass, the CLI prints an empty table.
 
 - [ ] **Step 5: Commit**
 
@@ -425,140 +521,256 @@ git commit -m "feat: post with an evidence invariant and verify after posting"
 
 ---
 
-### Task 7: The template extractor and the fixtures
+### Task 7: The run projection
 
 **Files:**
-- Create: `scripts/make-fixtures.ts`, `packages/core/src/extract/template-extractor.ts`, `packages/core/src/extract/template-extractor.test.ts`
-- Create: `fixtures/documents/{clean-order,vague-line,statement,credit-warning}.pdf`, `fixtures/catalogue.json`, `fixtures/customers.json`
+- Create: `packages/core/src/projection.ts`, `packages/core/src/projection.test.ts`
 
 **Interfaces:**
-- Consumes: `Extractor`, `ExtractedDocument`.
-- Produces: `createTemplateExtractor(): Extractor`.
+- Consumes: `Event[]`.
+- Produces: `rebuildRuns(events: Event[]): Run[]`, keyed by runId, latest state wins. Used by the UI and by accept after a restart.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+test("rebuilds a held run from events alone", async () => {
+  const deps = happyDeps();
+  const run = await processDocument(vagueLineDoc(), deps);
+  const [rebuilt] = rebuildRuns(await deps.log.read());
+  assert.equal(rebuilt!.id, run.id);
+  assert.equal(rebuilt!.decision?.outcome, "review");
+  assert.equal(rebuilt!.extracted?.lines.length, 1);
+  assert.equal(rebuilt!.stage, "decide");
+});
+test("a second event payload supersedes the first", async () => {
+  const log = new MemoryEventLog(fixedClock("2026-01-01T00:00:00Z"));
+  await log.append({ runId: "r", correlationId: "c", stage: "decide",
+    event: "decide.hold", summary: "held", data: { outcome: "review" } });
+  await log.append({ runId: "r", correlationId: "c", stage: "post",
+    event: "post.written", summary: "posted", data: { posted: true } });
+  const [run] = rebuildRuns(await log.read());
+  assert.equal(run!.stage, "post");
+});
+```
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run: `npm test -w @document-intake/core`
+Expected: FAIL, `rebuildRuns is not a function`.
+
+- [ ] **Step 3: Implement**
+
+Every stage event must carry its result in `data` under a fixed name: `document`, `extracted`, `decision`, `posted`. `document` is its `DocumentRef`, never the bytes, because the log is JSON. `rebuildRuns` folds them in order by `runId`. A missing payload is a projection error, not silence: throw `IntakeError("projection", ...)`.
+
+- [ ] **Step 4: Run it to see it pass**
+
+Run: `npm test -w @document-intake/core`
+Expected: all tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/core/src
+git commit -m "feat: rebuild runs from the event log"
+```
+
+---
+
+### Task 8: The template extractor, the identity read, and the fixtures
+
+**Files:**
+- Create: `scripts/make-fixtures.mjs`, `packages/core/src/extract/template-extractor.ts`, `packages/core/src/extract/identity.ts`, `packages/core/src/extract/template-extractor.test.ts`
+- Create: `fixtures/documents/{clean-order,letterhead,vague-line,statement,credit-warning,blank}.pdf`, `fixtures/catalogue.json`, `fixtures/customers.json`
+
+**Interfaces:**
+- Consumes: `Extractor`, `ExtractedDocument`, `SourceDocument`.
+- Produces: `createTemplateExtractor(): Extractor`, `readIdentity(text: string): Record<string, string>`.
 
 - [ ] **Step 1: Write the fixture generator**
 
-`scripts/make-fixtures.ts` uses `pdf-lib` (devDependency, justified: it renders the four sample documents and nothing else) to emit four A4 PDFs from a fictional distributor, "Northgate Interiors":
-`clean-order` (header fields plus three catalogue lines), `vague-line` (one line reading "weave 4417"), `statement` (an account statement, no order fields), `credit-warning` (two large lines). It also writes `catalogue.json` (six products with `sku`, `name`, `manufacturerRef`) and `customers.json` (four companies, one with a credit limit under the order total).
+`scripts/make-fixtures.mjs` is plain ESM JavaScript so it needs no build step. It uses `pdf-lib` (devDependency, pinned; justification: it renders the six sample documents and nothing else) and writes six A4 PDFs for the fictional distributor "Northgate Interiors":
+
+| File | Content |
+|---|---|
+| `clean-order.pdf` | header fields, three catalogue lines |
+| `letterhead.pdf` | our letterhead at the top, sender email of the customer in the body |
+| `vague-line.pdf` | header fields, one line reading `weave 4417` |
+| `statement.pdf` | an account statement, no order fields |
+| `credit-warning.pdf` | two large lines, above the customer's limit |
+| `blank.pdf` | a rectangle, no text layer |
+
+It also writes `catalogue.json` (six products with `sku`, `name`, `manufacturerRef`) and `customers.json` (four companies; one ambiguous name pair, one with a low credit limit). Commit the PDFs so a clone needs no regeneration. Run: `npm run fixtures`.
 
 - [ ] **Step 2: Write the failing extractor tests**
 
 ```ts
 test("reads the clean order", async () => {
-  const doc = await pdf("clean-order");
-  const out = await createTemplateExtractor().extract(doc);
+  const out = await extractor().extract(await pdf("clean-order"));
   assert.equal(out.status, "ok");
   assert.equal(out.fields.purchaseOrder, "PO-1042");
   assert.equal(out.lines.length, 3);
 });
-test("a statement is not an order", async () => {
+test("the identity read disagrees on letterhead", async () => {
+  const out = await extractor().extract(await pdf("letterhead"));
+  assert.equal(out.fields.company.toLowerCase(), "northgate interiors");
+  assert.match(out.identity.email ?? "", /buyer@/);
+});
+test("a statement is not a document", async () => {
   assert.equal((await extract("statement")).status, "not-a-document");
 });
 test("a non-PDF is not a document", async () => {
-  const out = await createTemplateExtractor().extract(nonPdfDoc());
-  assert.equal(out.status, "not-a-document");
+  assert.equal((await extractor().extract(docxLike())).status, "not-a-document");
 });
 test("a PDF with no text is unreadable", async () => {
   assert.equal((await extract("blank")).status, "unreadable");
+});
+test("a corrupt PDF is unreadable, not a crash", async () => {
+  assert.equal((await extractor().extract(corruptPdf())).status, "unreadable");
 });
 ```
 
 - [ ] **Step 3: Run them to see them fail**
 
 Run: `npm test -w @document-intake/core`
-Expected: FAIL, template extractor missing or fixture absent.
+Expected: FAIL, the extractor module is missing.
 
-- [ ] **Step 4: Implement the extractor**
+- [ ] **Step 4: Implement**
 
-`createTemplateExtractor()` parses with `pdfjs-dist` `getDocument`, joins page text, then applies labelled-field rules (`Purchase order`, `Date`, `Deliver to`) and a line rule that reads `description  qty  unit  total`. It returns `not-a-document` when no order fields and no lines are found, `unreadable` when the text layer is empty. `blank.pdf` is generated with a rectangle only.
+`template-extractor.ts` calls `getDocument({ data }).promise`, collects `getTextContent()` per page, and joins the text. It applies labelled-field rules (`Purchase order`, `Date`, `Deliver to`) and a line rule reading `description  qty  unit  total`. It returns `not-a-document` when no order fields and no lines are found, `unreadable` when the text layer is empty or the parser throws, and never leaks a parser exception to the pipeline. It then calls `readIdentity(text)`.
+
+`identity.ts` is the second, independent read: it returns the company, email and phone printed in the document body, using different rules from the header parser, so a supplier letterhead and a customer sender produce a disagreement rather than the same wrong answer. `decide` holds on that disagreement.
 
 - [ ] **Step 5: Run them to see them pass**
 
-Run: `npm run verify && ls fixtures/documents`
-Expected: 19 tests passing, four PDFs listed.
+Run: `npm run fixtures && npm run check`
+Expected: all tests pass and six PDFs list under `fixtures/documents`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add -A
-git commit -m "feat: add the template extractor and four sample documents"
+git commit -m "feat: add the template extractor, the identity read, and six fixtures"
 ```
 
 ---
 
-### Task 8: Demo adapters, API, and smoke test
+### Task 9: Demo adapters, API, lifecycle, and the smoke test
 
 **Files:**
 - Create: `apps/demo/{package.json,tsconfig.json,svelte.config.js,vite.config.ts}`
-- Create: `apps/demo/src/lib/server/{folder-inbox,jsonl-record,jsonl-log,wiring}.ts`
-- Create: `apps/demo/src/routes/api/{drain,runs}/+server.ts`, `apps/demo/src/routes/api/runs/[id]/accept/+server.ts`
-- Create: `apps/demo/tests/smoke.test.js`
+- Create: `apps/demo/src/lib/server/{folder-inbox,jsonl-record,jsonl-log,correction,wiring}.ts`
+- Create: `apps/demo/src/routes/api/{drain,runs}/+server.ts`, `apps/demo/src/routes/api/runs/[id]/{accept,reject}/+server.ts`
+- Create: `apps/demo/tests/{helpers.js,smoke.test.js,accept.test.js}`
 
 **Interfaces:**
-- Consumes: `processDocument`, fixtures, `@document-intake/core`.
-- Produces: the built demo server on `http://localhost:4321`; `POST /api/drain`, `GET /api/runs`, `POST /api/runs/:id/accept`.
+- Consumes: `processDocument`, `postRecord`, `rebuildRuns`, `verifyAll`, fixtures.
+- Produces: the built demo server on `http://127.0.0.1:4321`; `POST /api/drain`, `GET /api/runs`, `GET /api/runs/:id`, `POST /api/runs/:id/accept`, `POST /api/runs/:id/reject`.
 
-- [ ] **Step 1: Write the failing smoke test**
+- [ ] **Step 1: Write the failing tests**
 
-Plain ESM JS so the test needs no build of its own. It spawns `node apps/demo/build/index.js` on port 4399, polls `/api/runs` until it answers, then asserts:
+Plain ESM JavaScript, so the tests need no build of their own. Each spawns `node apps/demo/build/index.js` with `PORT=4399`, `HOST=127.0.0.1`, `INTAKE_STATE_DIR=mkdtemp()`, polls until it answers inside a bounded timeout, and kills the child in `finally`.
 
 ```js
-const outcomes = Object.fromEntries(runs.map((r) => [r.document, r.outcome]));
-assert.deepEqual(outcomes, {
-  "clean-order.pdf": "auto", "vague-line.pdf": "review",
-  "statement.pdf": "reject", "credit-warning.pdf": "auto",
+test("drain produces one run per fixture outcome", async () => {
+  const runs = await drainAndList();
+  const outcomes = Object.fromEntries(runs.map((r) => [r.document, r.outcome]));
+  assert.deepEqual(outcomes, {
+    "blank.pdf": "reject", "clean-order.pdf": "auto",
+    "credit-warning.pdf": "auto", "letterhead.pdf": "review",
+    "statement.pdf": "reject", "vague-line.pdf": "review",
+  });
+});
+test("accept posts once and replays as a duplicate", async () => {
+  const runs = await drainAndList();
+  const held = runs.find((r) => r.outcome === "review");
+  assert.equal((await post(`/api/runs/${held.id}/accept`, { corrections: [] })).status, 200);
+  await post("/api/drain", {});
+  assert.equal(await recordCount(), 1);
+});
+test("a correction with an unknown field is rejected", async () => {
+  const held = (await drainAndList()).find((r) => r.outcome === "review");
+  const res = await post(`/api/runs/${held.id}/accept`, { corrections: [{ field: "made.up", value: "x" }] });
+  assert.equal(res.status, 400);
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [ ] **Step 2: Run them to see them fail**
 
-Run: `node --test apps/demo/tests/smoke.test.js`
-Expected: FAIL, the server exits with `Cannot find module build/index.js`.
+Run: `node --test apps/demo/tests/`
+Expected: FAIL, `Cannot find module .../build/index.js`.
 
 - [ ] **Step 3: Implement the adapters and routes**
 
-`folder-inbox.ts`: reads `fixtures/documents` sorted by name, deriving `messageId` from the filename, skipping dotfiles.
-`jsonl-record.ts`: one JSON object per line in `var/records.jsonl`, `find` scans, `append` uses `appendFile`, `list` reads all.
-`jsonl-log.ts`: same shape for `var/events.jsonl`, assigning `seq` from the count.
-`wiring.ts`: builds `Deps` once per process, exporting `drain()`, `runs()`, `runById()`, `accept(id)`.
-Routes: `POST /api/drain` processes every inbox document, `GET /api/runs` returns the run summaries, `POST /api/runs/[id]/accept` re-runs the gates with the operator's correction then posts. `wiring.ts` is what the UI imports in Task 9.
+`folder-inbox.ts` reads `fixtures/documents` sorted by name, `messageId` from the filename, dotfiles skipped.
+`jsonl-record.ts` and `jsonl-log.ts` append one JSON object per line under `var/` (or `INTAKE_STATE_DIR`), assigning `seq` from the in-memory count while holding the queue. Records and events are JSON lines, so no document bytes are ever written.
+`correction.ts` validates a `{ corrections: Array<{ field: string; value: string }> }` payload: unknown fields and non-positive quantities are `400` with a typed body. Acceptable fields come from the run's extracted document.
+`wiring.ts` builds `Deps` once per process, wraps every mutation in one `createQueue()`, drains the inbox at boot, and watches it with `fs.watch` plus a 250ms debounce. `--fresh` truncates state before booting.
+Manual `drain` processes every inbox document. Accept re-runs the gates with the corrections appended as `operator:correction` evidence, then posts if the gates clear; reject records a `decide.reject` with `operator:reject`.
 
-- [ ] **Step 4: Run it to see it pass**
+- [ ] **Step 4: Run them to see them pass**
 
-Run: `npm run verify && node --test apps/demo/tests/smoke.test.js`
-Expected: 20 tests passing, smoke test green.
+Run: `npm run build && node --test apps/demo/tests/`
+Expected: all tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add -A
-git commit -m "feat: add the demo adapters, API, and smoke test"
+git commit -m "feat: add the demo adapters, API, lifecycle, and HTTP tests"
 ```
 
 ---
 
-### Task 9: The review UI
+### Task 10: The review UI
 
 **Files:**
 - Create: `apps/demo/src/app.html`, `apps/demo/src/app.css`
-- Create: `apps/demo/src/routes/+layout.svelte`, `apps/demo/src/routes/+page.svelte`, `apps/demo/src/routes/+page.server.ts`
-- Create: `apps/demo/src/routes/run/[id]/+page.svelte`, `apps/demo/src/routes/run/[id]/+page.server.ts`
+- Create: `apps/demo/src/routes/+layout.svelte`, `+page.svelte`, `+page.server.ts`
+- Create: `apps/demo/src/routes/run/[id]/+page.svelte`, `+page.server.ts`
+- Create: `apps/demo/tests/ui.test.js`
 
 **Interfaces:**
-- Consumes: `drain()`, `runs()`, `runById()`, `accept(id)` from `apps/demo/src/lib/server/wiring.ts`.
-- Produces: the four screens the README screenshots come from.
+- Consumes: `drain()`, `runs()`, `runById()`, `accept(id, corrections)`, `reject(id)`.
+- Produces: the four screens the README screenshots come from, plus `svelte-check` in the gate.
 
-- [ ] **Step 1: Build the four screens**
+- [ ] **Step 1: Add the Svelte toolchain to the gate**
 
-Queue: outcome counts as stat cards, rows carrying the hold reason. Run detail: stage timeline from the events, field table with source and rule, decision reasons. Held run: accept, correct-inline, reject, each with an inline confirm step. Replay: a button that re-drains and shows `ingest.duplicate`.
-`app.css`: the token architecture from the spec (paper, ink, accent, five status tones, flat surfaces, tabular numerals). Vendored fonts only, no CDN.
-The root script `demo`: `npm run build && node apps/demo/build/index.js`, with `DEMO_PORT` defaulting to 4321.
+`apps/demo/package.json`: `@sveltejs/kit`, `@sveltejs/adapter-node`, `svelte`, `vite`, `svelte-check`, all pinned; scripts `build`, `typecheck` = `svelte-kit sync && svelte-check --tsconfig ./tsconfig.json`. `tsconfig.json` extends `.svelte-kit/tsconfig.json`. Root `typecheck` already fans out, so no root change.
 
-- [ ] **Step 2: Run it by hand and by gate**
+- [ ] **Step 2: Write the failing UI test**
 
-Run: `npm run demo`, open `http://localhost:4321`, drain, open the held run, accept it, confirm the record appears. Then `npm run verify`.
-Expected: every screen renders with seeded data, no console errors, gates green.
+```js
+test("the queue renders a held run with its reason", async () => {
+  const html = await get("/");
+  assert.match(html, /Review/);
+  assert.match(html, /line 1 needs a person/);
+});
+test("run detail shows the short-circuit as zero model calls", async () => {
+  const auto = (await drainAndList()).find((r) => r.outcome === "auto");
+  const html = await get(`/run/${auto.id}`);
+  assert.match(html, /no model calls/i);
+});
+```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Run it to see it fail**
+
+Run: `node --test apps/demo/tests/ui.test.js`
+Expected: FAIL, the routes do not exist.
+
+- [ ] **Step 4: Build the screens**
+
+Queue: outcome counts as stat cards, rows carrying the hold reason, and `auto` rows marked `audit` so the person-in-the-loop claim stays visible.
+Run detail: stage timeline from the events, field table with source and rule, decision reasons, and the `decide.shortcircuit` fact rendered as "no model calls".
+Held run: accept, correct-inline, reject, each with an inline confirm step.
+Replay: a button that re-drains and shows `ingest.duplicate`.
+`app.css`: the spec's token architecture (paper, ink, accent, five status tones, flat surfaces, tabular numerals), system font stack only.
+
+- [ ] **Step 5: Run it to see it pass**
+
+Run: `npm run check && npm run demo`
+Expected: gates green including `svelte-check`; `http://127.0.0.1:4321` drains six fixtures, and the held run accepts.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add -A
@@ -567,7 +779,7 @@ git commit -m "feat: add the review UI"
 
 ---
 
-### Task 10: Documentation, ADRs, and the recorded demo
+### Task 11: Documentation, ADRs, and the demo script
 
 **Files:**
 - Create: `README.md`, `CONTRIBUTING.md`, `docs/{architecture.md,adapters.md,why-this-shape.md}`, `docs/decisions/{0001-local-first.md,0002-no-evidence-no-post.md,0003-short-circuit.md,0004-verify-after-posting.md}`, `docs/media/README.md`
@@ -579,24 +791,32 @@ git commit -m "feat: add the review UI"
 
 - [ ] **Step 1: Write the README first screen**
 
-Order: one-sentence promise, Mermaid diagram of `ingest -> extract -> resolve -> decide -> post -> verify` with the hold branch, the three decisions as three short headings, a demo block (`npm run demo`, then open the queue), a screenshot embed pointing at `docs/media/queue.png`, then "Take it as a base" naming the four files to replace, then the doc table.
+Order: one-sentence promise; Mermaid diagram of `ingest -> extract -> resolve -> decide -> post -> verify` with the hold branch; the three decisions as short headings; a fresh-clone block (`npm ci` once, then `npm run demo`, open the URL); screenshot embed; "Take it as a base" naming the four integration seams; the doc table.
+State plainly that `npm ci` is the only networked step.
 
 - [ ] **Step 2: Write `docs/adapters.md`**
 
-One section per seam: what the port promises, the demo implementation, the production mapping (Graph, Document Intelligence, ERP, CRM) with a code sketch, and what the adopter must guarantee (idempotency, error typing, no unbounded enumeration).
+One section per integration seam plus a short "supporting ports" section: what the port promises, the demo implementation, the production mapping (Graph, Document Intelligence, ERP, CRM) with a code sketch, and what the adopter must guarantee (idempotency, typed errors, bounded enumeration). Name the verification limitation: the pass compares against the local store, not the remote system.
 
 - [ ] **Step 3: Write the four ADRs and `why-this-shape.md`**
 
-Each ADR: context, decision, consequence, one alternative rejected. `why-this-shape.md` is the narrative rewritten from the private drafts with the distributor swapped for Northgate and every client figure and identifier removed.
+Each ADR: context, decision, consequence, one alternative rejected. `why-this-shape.md` is the narrative rewritten from the private drafts, distributor swapped for Northgate, every client figure and identifier removed.
 
-- [ ] **Step 4: Write `docs/media/README.md` and update the changelog**
+- [ ] **Step 4: Write the media script and update the changelog**
 
-The media README is an operator script, because recording a screen is the one step an agent cannot do: 90 seconds, start at the queue, drop `clean-order.pdf`, open the run, show the evidence table, open the held run, accept it, show the record. Saves `queue.png`, `run-detail.png`, `demo.gif`.
+Recording a screen is the one step an agent cannot do. `docs/media/README.md` gives the operator 90 seconds: start at the queue, drop `clean-order.pdf`, open the run, show the evidence table and the zero-model-calls line, open the held run, accept it, show the record. Saves `queue.png`, `run-detail.png`, `demo.gif`.
 
-- [ ] **Step 5: Verify links and run the gates**
+- [ ] **Step 5: Check the clean room without writing terms into the repo**
 
-Run: `npm run verify && grep -rniE 'jacobsen|carpet court|d365|hubspot' README.md docs fixtures packages apps --include='*.md' --include='*.ts' --include='*.json'`
-Expected: gates green, no matches.
+Run the identifier scan with the term list supplied from outside the repo, for example:
+
+```bash
+read -r -a TERMS < ~/.config/document-intake/cleanroom-terms
+npm run check
+for t in "${TERMS[@]}"; do ! grep -rniF -- "$t" README.md docs fixtures packages apps; done
+```
+
+Expected: gates green, no term found.
 
 - [ ] **Step 6: Commit**
 
@@ -607,57 +827,69 @@ git commit -m "docs: add the README, adapter guide, ADRs, and demo script"
 
 ---
 
-### Task 11: Ship the repo
+### Task 12: Ship the repo
 
 **Files:**
 - Modify: `.github/workflows/ci.yml`, `CHANGELOG.md`
 - Create: `.github/ISSUE_TEMPLATE/idea.md`, `SECURITY.md`
 
 **Interfaces:**
-- Consumes: the green `verify` chain.
-- Produces: `github.com/ultus-net/document-intake`, public, MIT.
+- Consumes: the green `check` chain and the media assets.
+- Produces: `github.com/ultus-net/document-intake`, public, MIT, marked as a template.
 
-- [ ] **Step 1: Confirm the gates and the clean-room check**
+- [ ] **Step 1: Confirm the gates, the assets, and the clean room**
 
-Run: `npm run verify`, then the identifier grep from Task 10.
-Expected: both clean.
+Run: `npm run check`, then `ls docs/media/{queue.png,run-detail.png,demo.gif}`, then the scan from Task 11.
+Expected: all three clean. No merge without the assets, because the README embeds them.
 
-- [ ] **Step 2: Create the remote, then push main and the branch**
+- [ ] **Step 2: Create the remote and push both branches**
+
+`main` is empty, so push it first, then the work branch.
 
 ```bash
 gh repo create ultus-net/document-intake --public \
   --description "Document to record, with a person in front of anything uncertain" \
   --source . --remote origin --disable-wiki
+git branch -m feat/template
 git push -u origin main
-git push -u origin docs/template-design
+git push -u origin feat/template
 ```
 
 - [ ] **Step 3: Open the issue and the PR, then record the review**
 
 ```bash
 gh issue create --title "Ship the document-intake template" --body "The scaffold, core pipeline, demo, and docs."
-gh pr create --title "feat: the document-intake template" --body "Fixes #1"
+gh pr create --base main --head feat/template \
+  --title "feat: the document-intake template" --body "Fixes #1"
 ```
 
 Then record the reviewer verdict with `record_review`.
 
-- [ ] **Step 4: Merge, then enable the template flag**
+- [ ] **Step 4: Merge, pull, then enable the template flag**
 
 ```bash
 gh pr merge --squash --delete-branch
+git checkout main && git pull --ff-only
 gh api -X PATCH repos/ultus-net/document-intake -F is_template=true
 ```
 
-Expected: repo public, marked as a template, README rendering.
+Expected: repo public, flagged as a template, README rendering with its images.
 
-- [ ] **Step 5: Cut the release**
+- [ ] **Step 5: Cut the release from the merged commit**
 
-`CHANGELOG.md` moves to `## 0.1.0 (2026-11-20)`, commit, `git tag -a v0.1.0 -m "v0.1.0"`, `git push --tags`, `gh release create v0.1.0 --generate-notes`.
+`CHANGELOG.md` moves to `## 0.1.0 (2026-11-20)`, commit on `main`, then:
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin main --tags
+gh release create v0.1.0 --generate-notes
+```
 
 ---
 
 ## Notes for the executor
 
-- Two things will need tuning against reality: the extractor's line rule and the fixture text that lands either side of the hold band. Adjust the fixture generator, not the thresholds.
-- `pdfjs-dist` in Node needs `--no-warnings` on some versions for its `Promise.withResolvers` warning. Pin the version and keep the warning out of test output.
+- Two things need tuning against reality: the extractor's line rule and the fixture text that lands either side of the hold band. Adjust the fixture generator, not the thresholds.
+- Pin `pdfjs-dist` exactly and prove extraction on Node 22 with `getDocument({ data }).promise` before building anything on it.
 - The demo's accept path re-runs the gates. Never let it post a value that skipped evidence, or the repo's central claim becomes false.
+- `verify` compares against the local store. Do not describe it as confirming the record exists in a remote system.

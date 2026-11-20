@@ -1,6 +1,6 @@
 # Design: document-intake, a public template for document-to-record pipelines
 
-- Status: draft, awaiting operator approval
+- Status: approved 2026-11-20
 - Date: 2026-11-20
 - Owner: ultus-net (github.com/ultus-net/document-intake)
 - Licence: MIT
@@ -117,7 +117,7 @@ document-intake/
   packages/core/             pipeline, gates, evidence, event log. No I/O.
   apps/demo/                 SvelteKit review UI, folder inbox, JSON stores
   fixtures/
-    documents/               four synthetic PDFs, one per outcome
+    documents/               six synthetic PDFs, one per outcome
     catalogue.json           fictional product catalogue
     customers.json           fictional customer directory
 ```
@@ -134,7 +134,7 @@ workspaces.
 - `apps/demo` is SvelteKit with `adapter-node`, server routes calling `core`.
   `npm run demo` builds, drains the inbox once, then serves on
   `localhost:4321`. It never opens a browser.
-- Assets are vendored. No CDN fonts, no analytics, no network call in the
+- The system font stack only. No CDN fonts, no analytics, no network call in the
   default path, so the demo looks the same on a machine with no egress.
 - Tests use the built-in `node:test`. No test framework dependency.
 - CI is GitHub Actions and headless: lint, typecheck, unit tests, then the demo
@@ -191,7 +191,9 @@ without evidence does not post.
 
 ### Seams
 
-Seven interfaces, all in `packages/core/src/ports.ts`:
+Eight interfaces, all in `packages/core/src/ports.ts`. Four are the integration
+seams an adopter replaces. Three support the pipeline: `Notifier`, `Clock`, and
+`EventLog`. One is optional: `Judge`, the only place a model may run.
 
 | Port | Demo implementation | Replaced by |
 |---|---|---|
@@ -202,15 +204,24 @@ Seven interfaces, all in `packages/core/src/ports.ts`:
 | `SystemOfRecord` | JSONL append store | ERP posting API |
 | `Notifier` | console | chat, email |
 | `Clock` | real time | fixed time in tests |
+| `EventLog` | JSONL append log | OpenTelemetry, a warehouse |
 
-The optional LLM extractor is one implementation behind `Extractor`, configured
-by an OpenAI-compatible base URL and key. Unset means never called. This keeps
-the claim "open frameworks" literal: no provider is load-bearing, including the
-demo's.
+Two judgement points, deliberately separate. `Extractor` turns a document into
+fields. `Judge` merges conflicting fields for a held run and returns a reason
+per field. Neither is required, and the demo ships a `Judge` that is configured
+but never called unless a line is held. This keeps the claim "open frameworks"
+literal: no provider is load-bearing, including the demo's.
 
-The demo is single-process and single-writer. `SystemOfRecord` appends one JSON
-line per record with no lock, and the port says so: one writer, no concurrency.
-Anything else belongs to the adapter an adopter writes.
+The demo is single-process. Every ingest, acceptance and append runs through one
+in-process queue, so a find-then-append cannot interleave with another request.
+`SystemOfRecord` appends one JSON line per record with no file lock, and the port
+says so: one writer, no cross-process concurrency. Anything else belongs to the
+adapter an adopter writes.
+
+The event log is the run store. Each event's `data` carries the payload needed to
+rebuild that run: the extracted document, the resolutions, the decision, and the
+operator's corrections. `rebuildRuns(events)` reduces them into the runs the UI
+shows, so a restart loses nothing and a held run can still be accepted.
 
 ### Pipeline
 
@@ -218,10 +229,13 @@ Anything else belongs to the adapter an adopter writes.
 ingest -> extract -> resolve -> decide -> post -> verify
 ```
 
-- `ingest` derives the idempotency key as `sha256(messageId + document bytes)`.
-  `messageId` is whatever the `Inbox` implementation treats as stable: a
-  filename in the demo, a Graph message id in production. The whole file is
-  hashed and the bytes are not normalised, so a re-saved PDF is a new document.
+- `ingest` derives the idempotency key as
+  `sha256(len(messageId) + ":" + messageId + document bytes)`. The length prefix
+  keeps two different identifier and byte splits from colliding. `messageId` is
+  whatever the `Inbox` implementation treats as stable: a filename in the demo, a
+  Graph message id in production. The whole file is hashed and the bytes are not
+  normalised, so a re-saved PDF is a new document. A separate ingestion index
+  records every key seen, so a held or rejected document does not re-run.
 - `extract` produces fields plus line items. `Extractor` is async and returns a
   whole-document result: a `status` of `ok`, `unreadable` or `not-a-document`,
   the fields, and the lines. It does not stream, and it supplies confidence only
@@ -267,14 +281,16 @@ never depends on the watcher.
 
 ### Demo data
 
-Four synthetic documents from a fictional distributor, each forcing a different
+Six synthetic documents from a fictional distributor, each forcing a different
 outcome:
 
 | Document | Outcome | What it proves |
 |---|---|---|
 | clean order | auto | the short-circuit, zero model calls |
+| supplier letterhead | review | the two reads disagree |
 | vague product line | review | hold with the reason visible |
 | supplier statement | reject | the validity gate |
+| scanned, no text | reject | unreadable is not an empty order |
 | order over a credit limit | auto + warning | warnings inform, they do not block |
 
 Committed PDFs, generated once by a script in `scripts/`, small enough to live
