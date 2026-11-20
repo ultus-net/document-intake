@@ -2,6 +2,8 @@
 
 **Status:** accepted
 
+**Date:** 2026-11-21
+
 ## Context
 
 A successful write is not proof that the value is still there, or that it is still the value that

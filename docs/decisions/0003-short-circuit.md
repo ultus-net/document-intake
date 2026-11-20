@@ -2,6 +2,8 @@
 
 **Status:** accepted
 
+**Date:** 2026-11-21
+
 ## Context
 
 The common case is a clean order whose lines match the catalogue exactly. Routing that case through

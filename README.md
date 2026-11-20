@@ -101,8 +101,9 @@ does not confirm that a remote system still holds the record. A successful post 
 | `fixtures` | six synthetic PDFs, a catalogue and a customer list |
 | `docs/architecture.md` | how the pieces fit |
 | `docs/adapters.md` | the integration seams |
-| `docs/why-this-shape.md` | the reasoning behind the design |
-| `docs/decisions` | four ADRs |
+| `docs/why-this-shape.md` | generated from the decision index; edit the index row, not this file |
+| `docs/decisions` | the ADR index (`README.md`) and four ADRs |
+| `scripts/decisions.mjs` | renders the teaching document and notebook notes from the index |
 
 ## Gates
 
@@ -111,7 +112,9 @@ npm run check   # lint, build, typecheck (svelte-check), tests
 ```
 
 Tests are `node:test`; core tests compile first and run against `dist`. The demo tests spawn the
-built server on their own port and exercise the HTTP surface.
+built server on their own port and exercise the HTTP surface. `check` also runs the generator tests
+and `npm run docs:decisions -- --check`, which fails when the ADR index and the generated documents
+disagree.
 
 ## Licence
 
